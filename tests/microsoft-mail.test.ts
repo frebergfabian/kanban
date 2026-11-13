@@ -12,7 +12,11 @@ import { Store } from "../server/store.js";
 import { Assistant, newSession, tools } from "../server/ai.js";
 import { createApp } from "../server/app.js";
 import { GraphMail, EwsMail } from "../server/mail-providers.js";
-import { microsoftConfigSchema, microsoftScopes } from "../server/microsoft.js";
+import {
+  microsoftConfigSchema,
+  microsoftScopes,
+  microsoftFromEnv,
+} from "../server/microsoft.js";
 import { mailSearch } from "../shared/mail.js";
 import type { EwsTransport } from "../server/calendar-providers.js";
 
@@ -124,6 +128,34 @@ const ews: EwsTransport = async (_credentials, xml) => {
   assert.equal(op, "GetItem");
   return soap(op, `<m:Items>${xmlMessage}</m:Items>`);
 };
+
+test("blank or malformed server configuration disables Microsoft without stopping on-prem or the application", () => {
+  const names = [
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET",
+    "MICROSOFT_TENANT_ID",
+    "MICROSOFT_REDIRECT_URI",
+  ];
+  const previous = names.map((name) => process.env[name]);
+  const store = new Store(":memory:");
+  try {
+    for (const value of ["", "not-a-url", "https://"]) {
+      for (const name of names) process.env[name] = "";
+      process.env.MICROSOFT_REDIRECT_URI = value;
+      assert.equal(microsoftFromEnv(), undefined);
+      const service = new CalendarService(store, { key: randomBytes(32), ews });
+      assert.equal(service.microsoftStatus().configured, false);
+      assert.deepEqual(service.accounts(), []);
+      service.close();
+    }
+  } finally {
+    names.forEach((name, i) => {
+      if (previous[i] === undefined) delete process.env[name];
+      else process.env[name] = previous[i];
+    });
+    store.close();
+  }
+});
 
 test("Microsoft config is server-owned, HTTPS callback is required outside localhost, and grants are read only", () => {
   assert.ok(microsoftConfigSchema.safeParse(config).success);
