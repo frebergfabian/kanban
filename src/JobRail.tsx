@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { AiJob } from "../shared/schema.js";
 import { api } from "./api.js";
+import { Icon } from "./Icon.js";
 const labels = {
   queued: "I kö",
   running: "Kör",
@@ -63,40 +64,33 @@ export function JobRail({
         </button>
         <button
           className="job-count"
-          aria-label="Visa AI-kön"
+          aria-label={`Visa AI-kön, ${active.length || jobs.length} jobb`}
           aria-expanded={expanded}
+          data-tip="Visa kön"
           onClick={() => setExpanded(!expanded)}
         >
-          {active.length || jobs.length} ▾
+          {active.length || jobs.length}
+          <Icon name="down" size={14} />
         </button>
         <button
-          className="icon-button small"
-          aria-label="Lägg till AI-uppgift"
+          className="icon-button"
+          data-tip="Nytt AI-jobb"
+          aria-label="Nytt AI-jobb"
           onClick={onNew}
         >
-          +
+          <Icon name="plus" />
         </button>
       </div>
-      {active.length > 1 && (
-        <div className="job-running-order">
-          {active.slice(1, 4).map((j, i) => (
-            <button key={j.id} onClick={() => onOpen(j)} title={j.message}>
-              {i + 2}. {j.message}
-            </button>
-          ))}
-          {active.length > 4 && <span>+{active.length - 4}</span>}
-        </div>
-      )}
       {expanded && (
         <section className="job-dropdown" aria-label="AI-kö">
           <header>
-            <strong>AI-jobb · ett åt gången</strong>
+            <strong>AI-jobb körs ett i taget</strong>
             <button
-              className="icon-button small"
+              className="icon-button"
               aria-label="Stäng AI-kön"
               onClick={() => setExpanded(false)}
             >
-              ×
+              <Icon name="close" />
             </button>
           </header>
           <p className="field-help mb-3">
@@ -120,22 +114,22 @@ export function JobRail({
                 {j.status === "queued" && (
                   <>
                     <button
-                      className="icon-button small"
+                      className="icon-button"
                       aria-label={`Flytta upp ${j.message}`}
                       onClick={() =>
                         void action(j, "move", { direction: "up" })
                       }
                     >
-                      ↑
+                      <Icon name="up" />
                     </button>
                     <button
-                      className="icon-button small"
+                      className="icon-button"
                       aria-label={`Flytta ned ${j.message}`}
                       onClick={() =>
                         void action(j, "move", { direction: "down" })
                       }
                     >
-                      ↓
+                      <Icon name="down" />
                     </button>
                   </>
                 )}

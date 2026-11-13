@@ -6,7 +6,7 @@ En lokal Kanban- och Scrum-app med en AI-assistent via Ollama. React, TypeScript
 
 - Flera Kanban-tavlor med egna kolumner, mål och AI-instruktioner.
 - Kort med beskrivning, prioritet, deadline och ett beständigt flöde av inlägg, uppdateringar och automatiska händelser.
-- Dra kort mellan kolumner eller flytta dem i kortdialogen. Kortens flöden följer med mellan tavlor.
+- Dra kort mellan kolumner med mus, pekskärm eller tangentbord, eller flytta dem i kortdialogen. Kortens flöden följer med mellan tavlor.
 - Scrum-tavlor under ett masterkort i Kanban, med backlog, sprintmål, datum och start/avslut av sprintar. Masterkortet visar framsteg och en länk till undertavlan.
 - En beständig AI-jobbkö. Chatten minimeras till headern när arbetet börjar och öppnas igen vid frågor. Lägg till fler jobb, ändra köordning och avbryt jobb.
 - Sökbar chatthistorik, källmärkta minnen och tekniska lärdomar som AI:n kan använda i senare jobb.
@@ -66,13 +66,13 @@ Appen är avsedd för en betrodd lokal dator eller ett betrott LAN och har ingen
 
 ## Använd tavlor och kort
 
-Välj tavla i listan ovanför kolumnerna. **Ny tavla** skapar en Kanban- eller Scrum-tavla. Tavlans **···** öppnar namn, mål och AI-instruktioner. Ge instruktioner som hjälper assistenten att skapa användbart arbete, exempelvis: ”Dela upp i små verifierbara steg och dokumentera hinder i kortets flöde.”
+Välj tavla i listan längst upp till vänster. **+ Ny tavla…** längst ned i listan skapar en Kanban- eller Scrum-tavla. Inställningsknappen bredvid listan öppnar namn, mål och AI-instruktioner. Ge instruktioner som hjälper assistenten att skapa användbart arbete, exempelvis: ”Dela upp i små verifierbara steg och dokumentera hinder i kortets flöde.”
 
-**Ny kolumn** lägger till egna steg, exempelvis Granskning eller Blockerat. Kolumnens inställning för färdigstatus avgör om kort räknas som klara; namnet i sig gör det inte.
+**Ny kolumn** till höger om kolumnerna lägger till egna steg, exempelvis Granskning eller Blockerat. Kolumnens inställning för färdigstatus avgör om kort räknas som klara; namnet i sig gör det inte.
 
 **Ny uppgift**, eller kolumnens **+**, skapar ett kort. Öppna kortet för att redigera fält, välja tavla/kolumn eller publicera en anteckning eller uppdatering. Manuella inlägg märks **Du**, AI-inlägg **AI-assistent**. Skapande, flytt och fältändringar loggas automatiskt. Fältredigering sparar bara ändrade fält så att samtidiga, orelaterade AI-ändringar inte skrivs över.
 
-Tangentbord för dragning: fokusera kortets grepp, tryck mellanslag, använd piltangenterna och släpp med mellanslag. Escape avbryter.
+Dra kort med musen, eller på pekskärm genom att hålla fingret på kortet en kort stund och sedan dra. Ett vanligt svep scrollar tavlan. Med tangentbord: tabba till kortets flyttgrepp, tryck mellanslag, använd piltangenterna och släpp med mellanslag. Escape avbryter.
 
 ## Scrum under ett masterkort
 

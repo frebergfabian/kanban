@@ -10,6 +10,7 @@ import type {
   AuditLog,
 } from "../shared/schema.js";
 import { api, requestId } from "./api.js";
+import { Icon } from "./Icon.js";
 export function AiPanel({
   open,
   onClose,
@@ -228,20 +229,15 @@ export function AiPanel({
       aria-hidden={!open}
       inert={!open}
     >
-      <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-        <div>
-          <h2 className="text-sm font-semibold">AI-assistent</h2>
-          <p className="mt-1 text-xs text-slate-400">
-            Lokalt · beständigt minne · jobbkö
-          </p>
-        </div>
+      <header className="panel-header">
+        <h2 className="panel-title">AI-assistent</h2>
         <button
           className="icon-button"
           aria-label="Stäng AI-assistent"
           title="Jobben fortsätter på servern"
           onClick={onClose}
         >
-          ×
+          <Icon name="close" />
         </button>
       </header>
       <nav className="ai-tabs" aria-label="AI-vyer">
@@ -275,8 +271,8 @@ export function AiPanel({
         {selectedTask && (
           <div className="selected-task">
             <span>Kort: {selectedTask.title}</span>
-            <button aria-label="Rensa valt AI-kort" onClick={onClearTask}>
-              ×
+            <button className="icon-button" aria-label="Rensa valt AI-kort" onClick={onClearTask}>
+              <Icon name="close" />
             </button>
           </div>
         )}
@@ -661,14 +657,14 @@ export function AiPanel({
             }}
           />
           <div className="flex justify-between items-center mt-2">
-            <span className="text-[11px] text-slate-400">
-              Enter skickar · Uppgifter körs i kö
+            <span className="composer-hint">
+              Enter skickar, Skift+Enter ger ny rad
             </span>
             <button
               className="button primary small"
               disabled={sending || !input.trim()}
             >
-              {sending ? "Lägger i kö…" : "Skicka"} ↑
+              {sending ? "Lägger i kö…" : "Skicka"}
             </button>
           </div>
         </form>

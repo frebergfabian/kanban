@@ -13,6 +13,9 @@ import { TaskDialog } from "./TaskDialog.js";
 import { SprintDialog, SprintPanel, type SprintEditor } from "./SprintPanel.js";
 import { AiPanel } from "./AiPanel.js";
 import { StructureDialog, type StructureEditor } from "./StructureDialog.js";
+import { Icon } from "./Icon.js";
+
+const NEW_BOARD = "__new_board";
 
 export default function App() {
   const [workspace, setWorkspace] = useState<Workspace>();
@@ -280,52 +283,78 @@ export default function App() {
   }
   const closeAi = useCallback(() => setAiOpen(false), []);
   const selected = workspace?.tasks.find((t) => t.id === selectedTaskId);
+  const statusText = status?.available
+    ? `Ollama ansluten (${status.model})`
+    : status
+      ? "Ollama frånkopplad"
+      : "Kontrollerar Ollama…";
   return (
     <div className="app-shell">
-      <header
-        className={`app-header ${work.jobs.length ? "with-jobs" : ""}`}
-        inert={aiOpen && mobile}
-      >
-        <div className="flex items-center gap-4">
+      <header className="app-header" inert={aiOpen && mobile}>
+        <div className="header-start">
           <a className="brand" href="/" aria-label="Kanban, startsida">
             <svg
-              width="19"
-              height="19"
+              width="20"
+              height="20"
               viewBox="0 0 20 20"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.7"
+              strokeWidth="2"
               aria-hidden="true"
             >
               <path d="M4 4v12m6-12v8m6-12v10" strokeLinecap="round" />
             </svg>
-            <h1>Kanban</h1>
           </a>
-          <button
-            className="ollama-status"
-            onClick={refreshStatus}
-            title={
-              status
-                ? `${status.model}: ${status.message}`
-                : "Kontrollerar Ollama"
-            }
-            aria-label={
-              status
-                ? `Ollama: ${status.message}. Kontrollera igen`
-                : "Kontrollerar Ollama"
-            }
-          >
-            <span
-              className={`status-dot ${status?.available ? "online" : status ? "offline" : ""}`}
-            />
-            <span className="status-text">
-              {status?.available
-                ? "Ollama ansluten"
-                : status
-                  ? "Ollama frånkopplad"
-                  : "Kontrollerar Ollama"}
-            </span>
-          </button>
+          <h1 className="sr-only">Kanban</h1>
+          {workspace && (
+            <>
+              <label className="sr-only" htmlFor="board-picker">
+                Tavla
+              </label>
+              <select
+                id="board-picker"
+                className="board-select"
+                value={workspace.board.id}
+                onChange={(e) =>
+                  e.target.value === NEW_BOARD
+                    ? setStructure({ kind: "board" })
+                    : selectBoard(e.target.value)
+                }
+              >
+                <optgroup label="Kanban">
+                  {workspace.boards
+                    .filter((b) => b.kind !== "scrum")
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                </optgroup>
+                {workspace.boards.some((b) => b.kind === "scrum") && (
+                  <optgroup label="Scrum">
+                    {workspace.boards
+                      .filter((b) => b.kind === "scrum")
+                      .map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                )}
+                <option value={NEW_BOARD}>+ Ny tavla…</option>
+              </select>
+              <button
+                className="icon-button"
+                data-tip="Tavlans inställningar"
+                aria-label="Tavlans inställningar"
+                onClick={() =>
+                  setStructure({ kind: "board", board: workspace.board })
+                }
+              >
+                <Icon name="settings" />
+              </button>
+            </>
+          )}
         </div>
         <JobRail
           jobs={work.jobs}
@@ -333,26 +362,35 @@ export default function App() {
           onNew={() => openConversation()}
           onRefresh={() => pollRef.current()}
         />
-        <div className="flex items-center gap-2">
+        <div className="header-end">
           <button
             className={`button ai-toggle ${aiOpen ? "active" : ""}`}
             aria-expanded={aiOpen}
+            data-tip={statusText}
+            data-tip-end=""
             onClick={() => {
               autoJob.current = undefined;
               setAiOpen((value) => !value);
               refreshStatus();
             }}
           >
-            AI-assistent
+            <span
+              className={`status-dot ${status?.available ? "online" : status ? "offline" : ""}`}
+              aria-hidden="true"
+            />
+            <span className="ai-label">AI-assistent</span>
+            <span className="sr-only">, {statusText}</span>
           </button>
           <button
             className="button primary"
+            aria-label="Ny uppgift"
             disabled={!workspace || selectedSprint?.status === "completed"}
             onClick={() =>
               workspace && setEditor({ columnId: visibleColumns[0].id })
             }
           >
-            <span aria-hidden="true">+</span>Ny uppgift
+            <Icon name="plus" size={16} />
+            <span className="new-task-label">Ny uppgift</span>
           </button>
         </div>
       </header>
@@ -360,71 +398,25 @@ export default function App() {
         <main className="board-area" inert={aiOpen && mobile}>
           {workspace && (
             <>
-              {workspace.board.parent_task_id && (
-                <div className="master-breadcrumb">
-                  <button
-                    className="text-button"
-                    onClick={() => void openMaster()}
-                  >
-                    ← Till masterkortet
-                  </button>
-                  <span>
-                    {workspace.board.parent_board_name} /{" "}
-                    {workspace.board.parent_task_title}
-                  </span>
+              {(workspace.board.parent_task_id ||
+                workspace.board.description) && (
+                <div className="board-intro">
+                  {workspace.board.parent_task_id && (
+                    <button
+                      className="back-link"
+                      onClick={() => void openMaster()}
+                    >
+                      <Icon name="back" size={16} />
+                      {workspace.board.parent_board_name} /{" "}
+                      {workspace.board.parent_task_title}
+                    </button>
+                  )}
+                  {workspace.board.description && (
+                    <p className="board-purpose">
+                      {workspace.board.description}
+                    </p>
+                  )}
                 </div>
-              )}
-              <div className="board-toolbar">
-                <div className="board-picker">
-                  <label className="sr-only" htmlFor="board-picker">
-                    Tavla
-                  </label>
-                  <select
-                    id="board-picker"
-                    value={workspace.board.id}
-                    onChange={(e) => selectBoard(e.target.value)}
-                  >
-                    {workspace.boards.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.kind === "scrum" ? "↳ Scrum · " : ""}
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className="icon-button small"
-                    aria-label="Redigera tavla"
-                    title="Mål och AI-instruktioner"
-                    onClick={() =>
-                      setStructure({ kind: "board", board: workspace.board })
-                    }
-                  >
-                    ···
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="button small"
-                    onClick={() => setStructure({ kind: "board" })}
-                  >
-                    + Ny tavla
-                  </button>
-                  <button
-                    className="button small"
-                    onClick={() =>
-                      setStructure({
-                        kind: "column",
-                        boardId: workspace.board.id,
-                        count: workspace.columns.length,
-                      })
-                    }
-                  >
-                    + Ny kolumn
-                  </button>
-                </div>
-              </div>
-              {workspace.board.description && (
-                <p className="board-purpose">{workspace.board.description}</p>
               )}
               {workspace.board.kind === "scrum" && (
                 <SprintPanel
@@ -438,22 +430,6 @@ export default function App() {
                   }}
                 />
               )}
-              <div className="board-caption">
-                <button
-                  className="board-instructions"
-                  onClick={() =>
-                    setStructure({ kind: "board", board: workspace.board })
-                  }
-                >
-                  {workspace.board.instructions
-                    ? "Mål & AI-instruktioner"
-                    : "Ge tavlan mål & AI-instruktioner"}
-                </button>
-                <span>
-                  {visibleTasks.length}{" "}
-                  {visibleTasks.length === 1 ? "uppgift" : "uppgifter"}
-                </span>
-              </div>
             </>
           )}
           {error && (
@@ -465,7 +441,7 @@ export default function App() {
             </div>
           )}
           {loading ? (
-            <p role="status" className="text-sm text-slate-400 p-5">
+            <p role="status" className="board-loading">
               Läser tavlan…
             </p>
           ) : (
@@ -479,6 +455,13 @@ export default function App() {
                 onCreate={(columnId) => setEditor({ columnId })}
                 onEdit={(task) => setEditor({ task, columnId: task.column_id })}
                 onMove={move}
+                onAddColumn={() =>
+                  setStructure({
+                    kind: "column",
+                    boardId: workspace.board.id,
+                    count: workspace.columns.length,
+                  })
+                }
                 onColumnEdit={(column) =>
                   setStructure({
                     kind: "column",

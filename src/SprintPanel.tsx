@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Sprint, Workspace } from "../shared/schema.js";
 import { api } from "./api.js";
+import { Icon } from "./Icon.js";
 export type SprintEditor = { sprint?: Sprint };
 export function SprintDialog({
   boardId,
@@ -68,7 +69,7 @@ export function SprintDialog({
             disabled={busy}
             onClick={onClose}
           >
-            ×
+            <Icon name="close" />
           </button>
         </header>
         <fieldset disabled={busy} className="space-y-5">

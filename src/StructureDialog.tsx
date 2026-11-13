@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BoardInfo, Column, Workspace } from "../shared/schema.js";
 import { api } from "./api.js";
+import { Icon } from "./Icon.js";
 
 export type StructureEditor =
   | {
@@ -137,7 +138,7 @@ export function StructureDialog({
             disabled={busy}
             aria-label="Stäng inställningar"
           >
-            ×
+            <Icon name="close" />
           </button>
         </header>
         <fieldset disabled={busy} className="space-y-5">

@@ -9,6 +9,7 @@ import {
   type Sprint,
 } from "../shared/schema.js";
 import { api } from "./api.js";
+import { Icon } from "./Icon.js";
 
 export function TaskDialog({
   task,
@@ -236,7 +237,7 @@ export function TaskDialog({
           disabled={busy || posting}
           onClick={onClose}
         >
-          ×
+          <Icon name="close" />
         </button>
       </header>
       <form onSubmit={save}>
@@ -384,7 +385,7 @@ export function TaskDialog({
             {task && (
               <button
                 type="button"
-                className="text-button text-red-700 mr-auto"
+                className="text-button danger mr-auto"
                 disabled={busy || posting}
                 onClick={() => setConfirm(true)}
               >
