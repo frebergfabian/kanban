@@ -24,7 +24,7 @@ export class GraphReader {
         headers: {
           Authorization: `Bearer ${await this.token()}`,
           Prefer:
-            'outlook.timezone="W. Europe Standard Time", outlook.body-content-type="text"',
+            'outlook.timezone="W. Europe Standard Time", outlook.body-content-type="text", IdType="ImmutableId", odata.maxpagesize=25',
         },
       });
     } catch (error) {

@@ -1,5 +1,6 @@
 import {
   createHash,
+  createHmac,
   timingSafeEqual,
   createCipheriv,
   createDecipheriv,
@@ -31,6 +32,8 @@ import { Store, HttpError } from "./store.js";
 import { GraphReader } from "./graph.js";
 import { EwsMail, GraphMail, type MailReader } from "./mail-providers.js";
 import { mailSearch, type MailPage } from "../shared/mail.js";
+import { GraphSync, EwsSync, type SyncReader } from "./sync-providers.js";
+import type { SyncFolder } from "../shared/sync.js";
 import {
   microsoftFromEnv,
   microsoftScopes,
@@ -146,7 +149,7 @@ export class CalendarService {
         });
     }
   }
-  private seal(id: string, value: Secret) {
+  private seal(id: string, value: unknown) {
     const iv = randomBytes(12),
       cipher = createCipheriv("aes-256-gcm", this.key, iv);
     cipher.setAAD(Buffer.from(id));
@@ -156,15 +159,15 @@ export class CalendarService {
     ]);
     return Buffer.concat([iv, cipher.getAuthTag(), data]).toString("base64");
   }
-  private secret(row: Row): Secret {
+  private open(id: string, encrypted: string): unknown {
     try {
-      const data = Buffer.from(row.secret, "base64"),
+      const data = Buffer.from(encrypted, "base64"),
         decipher = createDecipheriv(
           "aes-256-gcm",
           this.key,
           data.subarray(0, 12),
         );
-      decipher.setAAD(Buffer.from(row.id));
+      decipher.setAAD(Buffer.from(id));
       decipher.setAuthTag(data.subarray(12, 28));
       return JSON.parse(
         Buffer.concat([
@@ -178,6 +181,41 @@ export class CalendarService {
         "Kalenderkontots krypteringsnyckel stämmer inte. Återställ calendar.key från backup.",
       );
     }
+  }
+  private secret(row: Row): Secret {
+    return this.open(row.id, row.secret) as Secret;
+  }
+  sealIndex(id: string, value: unknown) {
+    return this.seal(`sync:${id}`, value);
+  }
+  openIndex<T>(id: string, encrypted: string): T {
+    return this.open(`sync:${id}`, encrypted) as T;
+  }
+  indexHash(value: string) {
+    return createHmac("sha256", this.key).update(`sync:${value}`).digest("hex");
+  }
+  private syncProvider(id: string): SyncReader {
+    this.mailProvider(id, true); // Reuse live consent/connection validation.
+    const row = this.row(id, true),
+      secret = this.secret(row);
+    return secret.kind === "online"
+      ? new GraphSync(() => this.token(id), this.options.request)
+      : new EwsSync(id, secret, this.options.ews);
+  }
+  syncFolders(id: string) {
+    return this.serial(id, () => this.syncProvider(id).folders());
+  }
+  syncPage(
+    id: string,
+    folder: SyncFolder,
+    cursor: string | null,
+    start: string,
+    end: string,
+    scan = false,
+  ) {
+    return this.serial(id, () =>
+      this.syncProvider(id).page(folder, cursor, start, end, scan),
+    );
   }
   private row(id: string, ai = false): Row {
     const row = this.store.db
@@ -484,14 +522,18 @@ export class CalendarService {
       this.store.db
         .prepare("DELETE FROM calendar_accounts WHERE id=?")
         .run(flow.id);
-      const failure = error as { errorCode?: unknown; errorNo?: unknown } | null;
+      const failure = error as {
+        errorCode?: unknown;
+        errorNo?: unknown;
+      } | null;
       const code =
         typeof failure?.errorCode === "string" &&
         microsoftFailureCodes.has(failure.errorCode)
           ? failure.errorCode
           : "other";
       const number =
-        typeof failure?.errorNo === "string" || typeof failure?.errorNo === "number"
+        typeof failure?.errorNo === "string" ||
+        typeof failure?.errorNo === "number"
           ? String(failure.errorNo)
           : "";
       this.audit("microsoft.login_failed", {

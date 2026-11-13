@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { calendarId, calendarRange } from "./calendar.js";
 import { mailSearch } from "./mail.js";
+import { analysisRequest, indexSearch } from "./sync.js";
 
 export const statuses = ["todo", "in_progress", "done"] as const;
 export const labels = { todo: "Att göra", in_progress: "Pågår", done: "Klart" };
@@ -117,6 +118,17 @@ const page = {
   limit: z.number().int().min(1).max(60).default(30),
 };
 export const toolSchemas = {
+  analyze_mail: analysisRequest.safeExtend({
+    kind: z.literal("mail").default("mail"),
+  }),
+  analyze_calendar: analysisRequest.safeExtend({
+    kind: z.literal("calendar").default("calendar"),
+  }),
+  get_analysis_run: z.object({ id: z.uuid() }).strict(),
+  cancel_analysis_run: z.object({ id: z.uuid() }).strict(),
+  search_index: indexSearch,
+  get_index_item: z.object({ id: z.uuid() }).strict(),
+  get_sync_status: z.object({}).strict(),
   list_mail_accounts: z.object({}).strict(),
   search_mail: mailSearch,
   get_mail: z.object({ account_id: z.uuid(), message_id: calendarId }).strict(),
@@ -316,6 +328,8 @@ export type Column = {
   position: number;
 };
 export type Task = {
+  urgency_score?: number;
+  source_count?: number;
   id: string;
   board_id: string;
   column_id: string;
@@ -460,6 +474,12 @@ export type Confirmation = {
   created_at: string;
 };
 export type AiWork = {
+  sync?: {
+    enabled: boolean;
+    queued: number;
+    failed: number;
+    analyzing: boolean;
+  };
   jobs: AiJob[];
   conversations: Conversation[];
   pending: Confirmation[];

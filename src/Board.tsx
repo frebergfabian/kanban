@@ -33,7 +33,10 @@ function CardContent({ task, done }: { task: Task; done: boolean }) {
     !done &&
     task.due_date < new Date().toLocaleDateString("sv-SE");
   const hasMeta =
-    task.priority !== "normal" || task.due_date || task.post_count > 0;
+    task.priority !== "normal" ||
+    task.due_date ||
+    task.post_count > 0 ||
+    task.urgency_score !== undefined;
   return (
     <>
       <span className="card-title">{task.title}</span>
@@ -42,6 +45,14 @@ function CardContent({ task, done }: { task: Task; done: boolean }) {
       )}
       {hasMeta && (
         <span className="card-meta">
+          {task.urgency_score !== undefined && (
+            <span
+              className={`urgency-score ${task.urgency_score >= 75 ? "urgent" : ""}`}
+              title={`${task.source_count ?? 0} kopplade mejl/kalenderobjekt`}
+            >
+              {task.urgency_score}%
+            </span>
+          )}
           {task.priority !== "normal" && (
             <span className={`priority ${task.priority}`}>
               <Icon name={task.priority === "high" ? "up" : "down"} size={14} />

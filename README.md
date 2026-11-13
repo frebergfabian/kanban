@@ -53,14 +53,14 @@ Appen är avsedd för en betrodd lokal dator eller ett betrott LAN och har ingen
 
 ## Inställningar
 
-| Variabel | Standard | Betydelse |
-| --- | --- | --- |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama-serverns adress. |
-| `OLLAMA_MODEL` | `qwen3:8b` | Modell med stöd för verktygsanrop. |
-| `HOST` | `127.0.0.1` | Adress som webbservern lyssnar på. |
-| `PORT` | `3000` | Webbserverns port. |
-| `DATABASE_PATH` | `./data/kanban.sqlite` | SQLite-fil; relativ sökväg räknas från repots rot. |
-| `OLLAMA_TIMEOUT_MS` | `120000` | Tidsgräns per Ollama-anrop, 1000–300000 ms. |
+| Variabel            | Standard                 | Betydelse                                          |
+| ------------------- | ------------------------ | -------------------------------------------------- |
+| `OLLAMA_URL`        | `http://localhost:11434` | Ollama-serverns adress.                            |
+| `OLLAMA_MODEL`      | `qwen3:8b`               | Modell med stöd för verktygsanrop.                 |
+| `HOST`              | `127.0.0.1`              | Adress som webbservern lyssnar på.                 |
+| `PORT`              | `3000`                   | Webbserverns port.                                 |
+| `DATABASE_PATH`     | `./data/kanban.sqlite`   | SQLite-fil; relativ sökväg räknas från repots rot. |
+| `OLLAMA_TIMEOUT_MS` | `120000`                 | Tidsgräns per Ollama-anrop, 1000–300000 ms.        |
 
 `.env.example` är en mall. Din `.env`, databaser, loggar, lokala testartefakter, byggfiler och `node_modules` ignoreras av Git.
 
@@ -139,13 +139,13 @@ Dessa använder databaser i minnet och ändrar inte dina befintliga tavlor. De v
 
 ## Kodstruktur
 
-| Sökväg | Innehåll |
-| --- | --- |
-| `src/` | React-gränssnitt, kortflöden, Scrum, AI-panel och jobbkö i headern. |
-| `server/` | Express-API, SQLite-lagring, Ollama-verktyg, kö, minne och loggar. |
-| `shared/schema.ts` | Gemensamma typer och strikt Zod-validering för API och verktyg. |
-| `docs/` | AI-handbok och arbetsinstruktioner. |
-| `tests/` | Automatiska tester och valfria Ollama-integrationstester. |
+| Sökväg             | Innehåll                                                            |
+| ------------------ | ------------------------------------------------------------------- |
+| `src/`             | React-gränssnitt, kortflöden, Scrum, AI-panel och jobbkö i headern. |
+| `server/`          | Express-API, SQLite-lagring, Ollama-verktyg, kö, minne och loggar.  |
+| `shared/schema.ts` | Gemensamma typer och strikt Zod-validering för API och verktyg.     |
+| `docs/`            | AI-handbok och arbetsinstruktioner.                                 |
+| `tests/`           | Automatiska tester och valfria Ollama-integrationstester.           |
 
 ### E-post och kalender
 
@@ -155,7 +155,9 @@ PKCE). Delegerade Mail.Read, Calendars.Read och User.Read ger endast läsåtkoms
 Befintlig Exchange on-prem/EWS återanvänds separat för e-post; dess manuella
 kalenderfunktioner behålls. Mejlen kan aldrig skickas, ändras, raderas eller
 markeras lästa av appen. AI:n har separata läsverktyg och vald källa kan kopplas
-till Kanban-kontext på begäran. Inga automatiska AI-analyser sätts upp.
+till Kanban-kontext. Synk och analys kan aktiveras för löpande lokal indexering,
+urgency 0–100 och automatisk skapning/uppdatering av Kanban-kort.
+Manuella analyser tar antal eller datumintervall. Se [Synk och analys](docs/SYNC.md).
 
 [Installationsguide och servervariabler](docs/CALENDAR.md). Befintlig krypterad
 tokenlagring och calendar.key återanvänds. Installationens konton delas med dem

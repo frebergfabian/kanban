@@ -38,6 +38,7 @@ assistant.calendar = new CalendarService(
   (event, detail) => assistant.knowledge.log(event, detail),
 );
 const app = createApp(store, assistant);
+app.locals.integrationSync?.start();
 let vite: import("vite").ViteDevServer | undefined;
 const compiled = fileURLToPath(import.meta.url).includes("/dist/server/");
 if (!compiled) {
@@ -69,6 +70,7 @@ async function shutdown() {
   server.close();
   server.closeAllConnections();
   await vite?.close();
+  await app.locals.integrationSync?.close();
   await app.locals.jobQueue.close();
   assistant.calendar?.close();
   store.close();

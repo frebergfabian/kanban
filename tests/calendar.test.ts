@@ -483,6 +483,7 @@ test("HTTP human CRUD is guarded; AI has only read tools and its calendar output
       .map((t) => t.function.name)
       .filter((x) => x.includes("calendar"));
     assert.deepEqual(toolNames.sort(), [
+      "analyze_calendar",
       "get_calendar_event",
       "list_calendar_accounts",
       "list_calendar_events",
