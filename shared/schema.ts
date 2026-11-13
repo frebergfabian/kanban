@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { calendarId, calendarRange } from "./calendar.js";
 
 export const statuses = ["todo", "in_progress", "done"] as const;
 export const labels = { todo: "Att göra", in_progress: "Pågår", done: "Klart" };
@@ -115,6 +116,16 @@ const page = {
   limit: z.number().int().min(1).max(60).default(30),
 };
 export const toolSchemas = {
+  list_calendar_accounts: z.object({}).strict(),
+  list_calendar_events: calendarRange.safeExtend({
+    account_id: z.uuid().optional(),
+    query: z.string().max(200).default(""),
+    offset: z.number().int().min(0).default(0),
+    limit: z.number().int().min(1).max(50).default(30),
+  }),
+  get_calendar_event: z
+    .object({ account_id: z.uuid(), event_id: calendarId })
+    .strict(),
   search_memory: z
     .object({
       query: z.string().max(200).default(""),

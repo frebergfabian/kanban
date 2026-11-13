@@ -18,6 +18,7 @@ import {
 import { Store, HttpError } from "./store.js";
 import { JobQueue } from "./jobs.js";
 import { Assistant, newSession, type Session } from "./ai.js";
+import { calendarRoutes } from "./calendar-routes.js";
 
 export function createApp(store: Store, assistant: Assistant) {
   const app = express();
@@ -82,6 +83,8 @@ export function createApp(store: Store, assistant: Assistant) {
     next();
   });
   app.use(express.json({ limit: "128kb" }));
+  if (assistant.calendar)
+    app.use("/api/calendar", calendarRoutes(assistant.calendar));
   const sessions = new Map<string, Session>();
   function session(req: express.Request, res: express.Response) {
     const now = Date.now();

@@ -146,3 +146,13 @@ Dessa använder databaser i minnet och ändrar inte dina befintliga tavlor. De v
 | `shared/schema.ts` | Gemensamma typer och strikt Zod-validering för API och verktyg. |
 | `docs/` | AI-handbok och arbetsinstruktioner. |
 | `tests/` | Automatiska tester och valfria Ollama-integrationstester. |
+
+### Kalender med Exchange
+
+Kalender i sidhuvudet har månad/agenda för flera konton: Exchange Online via
+Microsoft Graph och Exchange on-prem via EWS (NTLM eller Basic över HTTPS).
+Du kan skriva egna fristående bokningar i gränssnittet; AI:s tre kalenderverktyg
+är strikt skrivskyddade. Möten och återkommande händelser visas och ändras i
+Outlook. Anslut kontona i Kalenderkonton enligt [installationsguiden](docs/CALENDAR.md).
+Kalenderuppgifter och token krypteras med en separat lokal nyckel som ska ingå i
+säker backup. Kanban är en gemensam LAN-installation, även för kalenderåtkomst.
