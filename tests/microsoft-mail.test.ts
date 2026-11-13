@@ -63,6 +63,7 @@ function authMock() {
           params.codeChallenge,
         );
         assert.deepEqual(request.scopes, microsoftScopes);
+        assert.equal(request.nonce, params.nonce);
         await configuration.cache?.cachePlugin?.afterCacheAccess({
           tokenCache: cache,
           cacheHasChanged: true,
