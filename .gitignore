@@ -12,3 +12,4 @@ test-artifacts/
 *.db-*
 coverage/
 .DS_Store
+*.key

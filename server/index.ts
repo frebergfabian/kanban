@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { Store } from "./store.js";
 import { Assistant } from "./ai.js";
 import { createApp } from "./app.js";
+import { CalendarService } from "./calendar.js";
 
 // Works from both source and compiled output; commands run from the project root.
 const root = process.cwd();
@@ -31,6 +32,11 @@ const assistant = new Assistant(store, {
   model: process.env.OLLAMA_MODEL ?? "qwen3:8b",
   timeout,
 });
+assistant.calendar = new CalendarService(
+  store,
+  { keyPath: process.env.CALENDAR_KEY_PATH },
+  (event, detail) => assistant.knowledge.log(event, detail),
+);
 const app = createApp(store, assistant);
 let vite: import("vite").ViteDevServer | undefined;
 const compiled = fileURLToPath(import.meta.url).includes("/dist/server/");
@@ -64,6 +70,7 @@ async function shutdown() {
   server.closeAllConnections();
   await vite?.close();
   await app.locals.jobQueue.close();
+  assistant.calendar?.close();
   store.close();
   process.exit(0);
 }

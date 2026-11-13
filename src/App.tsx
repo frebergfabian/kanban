@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type {
   AiStatus,
   Workspace,
@@ -14,10 +21,16 @@ import { SprintDialog, SprintPanel, type SprintEditor } from "./SprintPanel.js";
 import { AiPanel } from "./AiPanel.js";
 import { StructureDialog, type StructureEditor } from "./StructureDialog.js";
 import { Icon } from "./Icon.js";
+const Calendar = lazy(() =>
+  import("./Calendar.js").then((module) => ({ default: module.Calendar })),
+);
 
 const NEW_BOARD = "__new_board";
 
 export default function App() {
+  const [calendarOpen, setCalendarOpen] = useState(
+    () => window.location.hash === "#calendar",
+  );
   const [workspace, setWorkspace] = useState<Workspace>();
   const [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -306,7 +319,22 @@ export default function App() {
             </svg>
           </a>
           <h1 className="sr-only">Kanban</h1>
-          {workspace && (
+          <button
+            className={`button calendar-nav ${calendarOpen ? "active" : ""}`}
+            aria-pressed={calendarOpen}
+            onClick={() => {
+              setCalendarOpen((v) => !v);
+              window.history.replaceState(
+                null,
+                "",
+                calendarOpen ? "/" : "#calendar",
+              );
+            }}
+          >
+            <Icon name="calendar" size={16} />
+            {calendarOpen ? "Tavlor" : "Kalender"}
+          </button>
+          {workspace && !calendarOpen && (
             <>
               <label className="sr-only" htmlFor="board-picker">
                 Tavla
@@ -381,102 +409,120 @@ export default function App() {
             <span className="ai-label">AI-assistent</span>
             <span className="sr-only">, {statusText}</span>
           </button>
-          <button
-            className="button primary"
-            aria-label="Ny uppgift"
-            disabled={!workspace || selectedSprint?.status === "completed"}
-            onClick={() =>
-              workspace && setEditor({ columnId: visibleColumns[0].id })
-            }
-          >
-            <Icon name="plus" size={16} />
-            <span className="new-task-label">Ny uppgift</span>
-          </button>
+          {!calendarOpen && (
+            <button
+              className="button primary"
+              aria-label="Ny uppgift"
+              disabled={!workspace || selectedSprint?.status === "completed"}
+              onClick={() =>
+                workspace && setEditor({ columnId: visibleColumns[0].id })
+              }
+            >
+              <Icon name="plus" size={16} />
+              <span className="new-task-label">Ny uppgift</span>
+            </button>
+          )}
         </div>
       </header>
       <div className="workspace">
         <main className="board-area" inert={aiOpen && mobile}>
-          {workspace && (
+          {calendarOpen ? (
+            <Suspense
+              fallback={
+                <p role="status" className="board-loading">
+                  Öppnar kalendern…
+                </p>
+              }
+            >
+              <Calendar />
+            </Suspense>
+          ) : (
             <>
-              {(workspace.board.parent_task_id ||
-                workspace.board.description) && (
-                <div className="board-intro">
-                  {workspace.board.parent_task_id && (
-                    <button
-                      className="back-link"
-                      onClick={() => void openMaster()}
-                    >
-                      <Icon name="back" size={16} />
-                      {workspace.board.parent_board_name} /{" "}
-                      {workspace.board.parent_task_title}
-                    </button>
+              {workspace && (
+                <>
+                  {(workspace.board.parent_task_id ||
+                    workspace.board.description) && (
+                    <div className="board-intro">
+                      {workspace.board.parent_task_id && (
+                        <button
+                          className="back-link"
+                          onClick={() => void openMaster()}
+                        >
+                          <Icon name="back" size={16} />
+                          {workspace.board.parent_board_name} /{" "}
+                          {workspace.board.parent_task_title}
+                        </button>
+                      )}
+                      {workspace.board.description && (
+                        <p className="board-purpose">
+                          {workspace.board.description}
+                        </p>
+                      )}
+                    </div>
                   )}
-                  {workspace.board.description && (
-                    <p className="board-purpose">
-                      {workspace.board.description}
-                    </p>
+                  {workspace.board.kind === "scrum" && (
+                    <SprintPanel
+                      workspace={workspace}
+                      view={effectiveView}
+                      onView={setSprintView}
+                      onEdit={(sprint) => setSprintEditor({ sprint })}
+                      onSaved={(data) => {
+                        setSprintView(effectiveView);
+                        applyWorkspace(data);
+                      }}
+                    />
                   )}
+                </>
+              )}
+              {error && (
+                <div className="error board-error" role="alert">
+                  {error}
+                  <button className="text-button" onClick={() => void load()}>
+                    Försök igen
+                  </button>
                 </div>
               )}
-              {workspace.board.kind === "scrum" && (
-                <SprintPanel
-                  workspace={workspace}
-                  view={effectiveView}
-                  onView={setSprintView}
-                  onEdit={(sprint) => setSprintEditor({ sprint })}
-                  onSaved={(data) => {
-                    setSprintView(effectiveView);
-                    applyWorkspace(data);
-                  }}
-                />
+              {loading ? (
+                <p role="status" className="board-loading">
+                  Läser tavlan…
+                </p>
+              ) : (
+                workspace && (
+                  <Board
+                    tasks={visibleTasks}
+                    columns={visibleColumns}
+                    creationDisabled={selectedSprint?.status === "completed"}
+                    onOpenBoard={selectBoard}
+                    disabled={moving}
+                    onCreate={(columnId) => setEditor({ columnId })}
+                    onEdit={(task) =>
+                      setEditor({ task, columnId: task.column_id })
+                    }
+                    onMove={move}
+                    onAddColumn={() =>
+                      setStructure({
+                        kind: "column",
+                        boardId: workspace.board.id,
+                        count: workspace.columns.length,
+                      })
+                    }
+                    onColumnEdit={(column) =>
+                      setStructure({
+                        kind: "column",
+                        boardId: workspace.board.id,
+                        column,
+                        count: workspace.columns.length,
+                      })
+                    }
+                  />
+                )
+              )}
+              {moving && (
+                <span className="sr-only" role="status">
+                  Sparar kortets position…
+                </span>
               )}
             </>
-          )}
-          {error && (
-            <div className="error board-error" role="alert">
-              {error}
-              <button className="text-button" onClick={() => void load()}>
-                Försök igen
-              </button>
-            </div>
-          )}
-          {loading ? (
-            <p role="status" className="board-loading">
-              Läser tavlan…
-            </p>
-          ) : (
-            workspace && (
-              <Board
-                tasks={visibleTasks}
-                columns={visibleColumns}
-                creationDisabled={selectedSprint?.status === "completed"}
-                onOpenBoard={selectBoard}
-                disabled={moving}
-                onCreate={(columnId) => setEditor({ columnId })}
-                onEdit={(task) => setEditor({ task, columnId: task.column_id })}
-                onMove={move}
-                onAddColumn={() =>
-                  setStructure({
-                    kind: "column",
-                    boardId: workspace.board.id,
-                    count: workspace.columns.length,
-                  })
-                }
-                onColumnEdit={(column) =>
-                  setStructure({
-                    kind: "column",
-                    boardId: workspace.board.id,
-                    column,
-                    count: workspace.columns.length,
-                  })
-                }
-              />
-            )
-          )}
-          {moving && (
-            <span className="sr-only" role="status">
-              Sparar kortets position…
-            </span>
           )}
         </main>
         {workspace && (
