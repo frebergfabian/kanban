@@ -8,6 +8,8 @@ import type {
 } from "../shared/calendar.js";
 import { api } from "./api.js";
 import { Icon } from "./Icon.js";
+import { Connections } from "./Connections.js";
+import type { ExternalContext } from "../shared/schema.js";
 
 const zone = "Europe/Stockholm";
 const now = () => DateTime.now().setZone(zone);
@@ -43,7 +45,11 @@ function onDay(event: CalendarEvent, day: DateTime) {
   );
 }
 
-export function Calendar() {
+export function Calendar({
+  onSelection,
+}: {
+  onSelection: (context?: ExternalContext) => void;
+}) {
   const [accounts, setAccounts] = useState<CalendarAccount[]>([]),
     [selected, setSelected] = useState("");
   const [anchor, setAnchor] = useState(() => now().startOf("month"));
@@ -60,6 +66,15 @@ export function Calendar() {
     day?: string;
   }>();
   const generation = useRef(0);
+  useEffect(() => {
+    if (editor?.event)
+      onSelection({
+        kind: "calendar",
+        account_id: editor.event.account_id,
+        item_id: editor.event.id,
+      });
+  }, [editor, onSelection]);
+  useEffect(() => () => onSelection(undefined), [onSelection]);
   const load = useCallback(
     async (quiet = false) => {
       const request = ++generation.current;
@@ -124,7 +139,10 @@ export function Calendar() {
     (_, i) => start.plus({ days: i }),
   );
   const monthDays = days.filter((d) => d.month === anchor.month);
-  const connected = accounts.some((a) => a.connected);
+  const connected = accounts.some(
+    (a) =>
+      a.connected && a.kind === "onprem" && (!selected || a.id === selected),
+  );
   function eventButton(event: CalendarEvent, compact = false) {
     return (
       <button
@@ -158,7 +176,7 @@ export function Calendar() {
         </div>
         <div className="calendar-actions">
           <button className="button" onClick={() => setSettings(true)}>
-            Kalenderkonton
+            Konton
           </button>
           <button
             className="button primary"
@@ -259,7 +277,7 @@ export function Calendar() {
             Exchange-server.
           </p>
           <button className="button primary" onClick={() => setSettings(true)}>
-            Anslut kalenderkonto
+            Anslut konto
           </button>
         </div>
       )}
@@ -321,7 +339,7 @@ export function Calendar() {
         </p>
       )}
       {settings && (
-        <CalendarAccounts
+        <Connections
           onClose={() => {
             setSettings(false);
             setSelected("");
@@ -346,343 +364,6 @@ export function Calendar() {
   );
 }
 
-function CalendarAccounts({ onClose }: { onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [accounts, setAccounts] = useState<CalendarAccount[]>([]),
-    [kind, setKind] = useState<"online" | "onprem">("online");
-  const [name, setName] = useState(""),
-    [client, setClient] = useState(""),
-    [tenant, setTenant] = useState("common");
-  const [endpoint, setEndpoint] = useState(""),
-    [username, setUsername] = useState(""),
-    [password, setPassword] = useState(""),
-    [auth, setAuth] = useState("ntlm");
-  const [allow, setAllow] = useState(true),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [removing, setRemoving] = useState<string>();
-  const load = useCallback(async () => {
-    const data = await api<{ accounts: CalendarAccount[] }>(
-      "/api/calendar/accounts",
-    );
-    setAccounts(data.accounts);
-  }, []);
-  useEffect(() => {
-    dialog.current?.showModal();
-    void load().catch((e) => setError(message(e)));
-    const timer = setInterval(() => {
-      void load().catch((e) => setError(message(e)));
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [load]);
-  async function action(fn: () => Promise<unknown>) {
-    setBusy(true);
-    setError("");
-    try {
-      await fn();
-      await load();
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function permission(id: string, allow_ai: boolean) {
-    const previous = accounts;
-    setAccounts((current) =>
-      current.map((a) => (a.id === id ? { ...a, allow_ai } : a)),
-    );
-    setBusy(true);
-    setError("");
-    try {
-      await manual(`/accounts/${id}`, "PATCH", { allow_ai });
-      await load();
-    } catch (e) {
-      setAccounts(previous);
-      setError(message(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    await action(async () => {
-      const body =
-        kind === "online"
-          ? {
-              kind,
-              name,
-              client_id: client.trim(),
-              tenant: tenant.trim(),
-              allow_ai: allow,
-            }
-          : {
-              kind,
-              name,
-              endpoint: endpoint.trim(),
-              username: username.trim(),
-              password,
-              auth,
-              allow_ai: allow,
-            };
-      const result = await manual<{ account: CalendarAccount }>(
-        "/accounts",
-        "POST",
-        body,
-      );
-      setPassword("");
-      setName("");
-      if (kind === "online")
-        await manual(`/accounts/${result.account.id}/login`, "POST");
-    });
-  }
-  return (
-    <dialog
-      ref={dialog}
-      className="task-dialog calendar-dialog"
-      aria-labelledby="calendar-accounts-title"
-      onCancel={(e) => {
-        e.preventDefault();
-        if (!busy) onClose();
-      }}
-    >
-      <header className="calendar-dialog-header">
-        <h2 id="calendar-accounts-title">Kalenderkonton</h2>
-        <button
-          className="icon-button"
-          aria-label="Stäng kalenderkonton"
-          disabled={busy}
-          onClick={onClose}
-        >
-          <Icon name="close" />
-        </button>
-      </header>
-      <p>
-        Kontona visar varsin huvudkalender. Du kan skriva egna bokningar här.
-        AI:n kan bara läsa.
-      </p>
-      <div className="calendar-accounts">
-        {accounts.map((account) => (
-          <section key={account.id} className="calendar-account-card">
-            <div className="calendar-account-top">
-              <strong>{account.name}</strong>
-              <span>
-                {account.kind === "online"
-                  ? "Exchange Online"
-                  : "Exchange on-prem"}{" "}
-                · {account.connected ? "Ansluten" : "Väntar på inloggning"}
-              </span>
-            </div>
-            <label className="calendar-checkbox">
-              <input
-                type="checkbox"
-                checked={account.allow_ai}
-                disabled={busy}
-                onChange={(e) => void permission(account.id, e.target.checked)}
-              />{" "}
-              AI får läsa denna kalender
-            </label>
-            {account.error && (
-              <p role="alert" className="error">
-                {account.error}
-              </p>
-            )}
-            {account.login && (
-              <div className="calendar-login">
-                <p>
-                  Öppna{" "}
-                  <a href={account.login.url} target="_blank" rel="noreferrer">
-                    Microsofts inloggning
-                  </a>{" "}
-                  och ange koden:
-                </p>
-                <strong className="calendar-device-code">
-                  {account.login.code}
-                </strong>
-                <p>
-                  Välj rätt konto. Koden gäller till{" "}
-                  {date(account.login.expires_at).toFormat("HH:mm")}.
-                </p>
-              </div>
-            )}
-            <div className="calendar-actions">
-              {account.kind === "online" && !account.login && (
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() =>
-                    void action(() =>
-                      manual(`/accounts/${account.id}/login`, "POST"),
-                    )
-                  }
-                >
-                  {account.connected
-                    ? "Förnya inloggning"
-                    : "Logga in hos Microsoft"}
-                </button>
-              )}
-              {removing === account.id ? (
-                <>
-                  <span>
-                    Ta bort kopplingen? Händelserna finns kvar i Exchange.
-                  </span>
-                  <button
-                    className="button danger"
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        await manual(`/accounts/${account.id}`, "DELETE");
-                        setRemoving(undefined);
-                      })
-                    }
-                  >
-                    Ja, ta bort koppling
-                  </button>
-                  <button
-                    className="button"
-                    disabled={busy}
-                    onClick={() => setRemoving(undefined)}
-                  >
-                    Avbryt
-                  </button>
-                </>
-              ) : (
-                <button
-                  className="text-button"
-                  disabled={busy}
-                  onClick={() => setRemoving(account.id)}
-                >
-                  Ta bort koppling
-                </button>
-              )}
-            </div>
-          </section>
-        ))}
-      </div>
-      <form className="calendar-form" onSubmit={add}>
-        <h3>Lägg till konto</h3>
-        <label>
-          Typ
-          <select
-            value={kind}
-            disabled={busy}
-            onChange={(e) => setKind(e.target.value as typeof kind)}
-          >
-            <option value="online">Exchange Online / Microsoft 365</option>
-            <option value="onprem">Exchange on-prem</option>
-          </select>
-        </label>
-        <label>
-          Kontonamn
-          <input
-            required
-            maxLength={80}
-            placeholder="Privat eller Jobb"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        {kind === "online" ? (
-          <>
-            <label>
-              Application (client) ID
-              <input
-                required
-                value={client}
-                onChange={(e) => setClient(e.target.value)}
-                placeholder="Appregistreringens UUID"
-              />
-            </label>
-            <label>
-              Tenant
-              <input
-                required
-                value={tenant}
-                onChange={(e) => setTenant(e.target.value)}
-              />
-            </label>
-            <p className="calendar-hint">
-              Registrera en public client-app i Microsoft Entra med delegerad
-              Calendars.ReadWrite och tillåt public client-flöden. Ingen client
-              secret eller redirect-adress behövs.{" "}
-              <a href="/api/calendar/guide" target="_blank">
-                Visa installationsguide
-              </a>
-              .
-            </p>
-          </>
-        ) : (
-          <>
-            <label>
-              EWS-adress
-              <input
-                type="url"
-                required
-                placeholder="https://mail.foretaget.se/EWS/Exchange.asmx"
-                value={endpoint}
-                onChange={(e) => setEndpoint(e.target.value)}
-              />
-            </label>
-            <label>
-              Användarnamn
-              <input
-                required
-                autoComplete="username"
-                placeholder="DOMÄN\användare eller användare@företag.se"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
-            </label>
-            <label>
-              Lösenord
-              <input
-                type="password"
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </label>
-            <label>
-              Autentisering
-              <select value={auth} onChange={(e) => setAuth(e.target.value)}>
-                <option value="ntlm">NTLM</option>
-                <option value="basic">Basic över HTTPS (om IT tillåter)</option>
-              </select>
-            </label>
-            <p className="calendar-hint">
-              Servern behöver nå jobbets EWS, eventuellt via VPN. Certifikatet
-              måste vara betrott. Inloggningen testas innan kontot sparas. Fråga
-              IT om rätt EWS-adress och autentisering.
-            </p>
-          </>
-        )}
-        <label className="calendar-checkbox">
-          <input
-            type="checkbox"
-            checked={allow}
-            onChange={(e) => setAllow(e.target.checked)}
-          />{" "}
-          AI får läsa denna kalender
-        </label>
-        <p className="calendar-hint">
-          Inloggningsuppgifter och Microsoft-token lagras krypterat på servern.
-          Anslutningar och kalenderdata delas med dem som har tillgång till
-          denna Kanban-installation.
-        </p>
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-        <button className="button primary" disabled={busy}>
-          {busy ? "Ansluter…" : "Lägg till kalenderkonto"}
-        </button>
-      </form>
-    </dialog>
-  );
-}
-
 function EventDialog({
   accounts,
   event,
@@ -698,6 +379,7 @@ function EventDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  accounts = event ? accounts : accounts.filter((a) => a.kind === "onprem");
   const dialog = useRef<HTMLDialogElement>(null),
     initial = day
       ? date(day).set({ hour: 9 })
@@ -822,8 +504,9 @@ function EventDialog({
         </header>
         {readOnly && (
           <p className="calendar-hint">
-            Möten med deltagare och återkommande händelser läses här. Ändra dem
-            i Outlook.
+            {accounts.find((a) => a.id === event?.account_id)?.kind === "online"
+              ? "Microsoft 365-kalendern är skrivskyddad. Ändra händelsen i Outlook."
+              : "Möten med deltagare och återkommande händelser läses här. Ändra dem i Outlook."}
             {outlook && (
               <>
                 {" "}

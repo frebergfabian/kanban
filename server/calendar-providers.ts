@@ -3,6 +3,7 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { DateTime } from "luxon";
 import type { CalendarDraft, CalendarEvent } from "../shared/calendar.js";
 import { HttpError } from "./store.js";
+import { GraphReader } from "./graph.js";
 
 const zone = "Europe/Stockholm",
   exchangeZone = "W. Europe Standard Time";
@@ -34,76 +35,14 @@ function time(value: string, allDay: boolean): string {
     throw new HttpError(502, "Exchange returnerade ett ogiltigt datum.");
   return allDay ? dt.setZone(zone).toISODate()! : dt.toUTC().toISO()!;
 }
-const graphBody = (input: CalendarDraft) => ({
-  subject: input.title,
-  body: { contentType: "text", content: input.description },
-  location: { displayName: input.location },
-  isAllDay: input.all_day,
-  start: {
-    dateTime: input.all_day
-      ? `${input.start}T00:00:00`
-      : DateTime.fromISO(input.start).toUTC().toFormat("yyyy-MM-dd'T'HH:mm:ss"),
-    timeZone: input.all_day ? exchangeZone : "UTC",
-  },
-  end: {
-    dateTime: input.all_day
-      ? `${input.end}T00:00:00`
-      : DateTime.fromISO(input.end).toUTC().toFormat("yyyy-MM-dd'T'HH:mm:ss"),
-    timeZone: input.all_day ? exchangeZone : "UTC",
-  },
-});
 export class GraphCalendar implements CalendarProvider {
+  private graph: GraphReader;
   constructor(
     private accountId: string,
-    private token: () => Promise<string>,
-    private request: typeof fetch = fetch,
-  ) {}
-  private async call(
-    path: string,
-    method = "GET",
-    body?: unknown,
-    version?: string,
-  ): Promise<any> {
-    const url = new URL(path, "https://graph.microsoft.com/v1.0/");
-    if (
-      url.origin !== "https://graph.microsoft.com" ||
-      !url.pathname.startsWith("/v1.0/me/")
-    )
-      throw new HttpError(502, "Ogiltig Graph-sidadress.");
-    let response: Response;
-    try {
-      response = await this.request(url, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(25000),
-        headers: {
-          Authorization: `Bearer ${await this.token()}`,
-          "Content-Type": "application/json",
-          Prefer:
-            'outlook.timezone="W. Europe Standard Time", outlook.body-content-type="text"',
-          ...(version ? { "If-Match": version } : {}),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw new HttpError(
-        502,
-        "Kunde inte nå Microsoft Graph. Kontrollera nätverket och försök igen.",
-      );
-    }
-    if (!response.ok)
-      throw new HttpError(
-        response.status === 412 ? 409 : 502,
-        response.status === 401
-          ? "Microsoft-inloggningen behöver förnyas. Anslut kontot igen."
-          : response.status === 403
-            ? "Microsoft nekade kalenderåtkomst. Kontrollera Calendars.ReadWrite och organisationens medgivande."
-            : response.status === 412
-              ? "Händelsen har ändrats. Läs in den igen."
-              : `Microsoft Graph svarade med HTTP ${response.status}. Läs in kalendern innan du försöker igen.`,
-      );
-    return response.status === 204 ? undefined : response.json();
+    token: () => Promise<string>,
+    request: typeof fetch = fetch,
+  ) {
+    this.graph = new GraphReader(token, request);
   }
   private event(item: any): CalendarEvent {
     const allDay = !!item.isAllDay;
@@ -123,13 +62,7 @@ export class GraphCalendar implements CalendarProvider {
       start: time(item.start.dateTime, allDay),
       end: time(item.end.dateTime, allDay),
       all_day: allDay,
-      read_only:
-        recurring ||
-        !!item.isMeeting ||
-        !!item.isOnlineMeeting ||
-        !!item.attendees?.length ||
-        item.isOrganizer === false ||
-        !!item.isCancelled,
+      read_only: true,
       recurring,
       organizer: item.organizer?.emailAddress?.address ?? "",
       attendees: (item.attendees ?? []).map(
@@ -143,35 +76,29 @@ export class GraphCalendar implements CalendarProvider {
       `me/calendarView?${new URLSearchParams({ startDateTime: start, endDateTime: end, $top: "100", $orderby: "start/dateTime" })}`;
     const events: CalendarEvent[] = [];
     for (let page = 0; path && page < 5; page++) {
-      const result = await this.call(path);
+      const result = await this.graph.get(path);
       events.push(...result.value.map((x: any) => this.event(x)));
       path = result["@odata.nextLink"];
     }
     return { events, truncated: !!path };
   }
   async get(id: string) {
-    return this.event(await this.call(`me/events/${encodeURIComponent(id)}`));
-  }
-  async create(input: CalendarDraft) {
-    await this.call("me/calendar/events", "POST", graphBody(input));
-  }
-  async update(id: string, version: string, input: CalendarDraft) {
-    writable(await this.get(id), version);
-    await this.call(
-      `me/events/${encodeURIComponent(id)}`,
-      "PATCH",
-      graphBody(input),
-      version,
+    return this.event(
+      await this.graph.get(`me/events/${encodeURIComponent(id)}`),
     );
   }
-  async delete(id: string, version: string) {
-    writable(await this.get(id), version);
-    await this.call(
-      `me/events/${encodeURIComponent(id)}`,
-      "DELETE",
-      undefined,
-      version,
-    );
+  async create(_input: CalendarDraft): Promise<void> {
+    throw new HttpError(403, "Microsoft 365-kalendern är skrivskyddad.");
+  }
+  async update(
+    _id: string,
+    _version: string,
+    _input: CalendarDraft,
+  ): Promise<void> {
+    throw new HttpError(403, "Microsoft 365-kalendern är skrivskyddad.");
+  }
+  async delete(_id: string, _version: string): Promise<void> {
+    throw new HttpError(403, "Microsoft 365-kalendern är skrivskyddad.");
   }
 }
 
@@ -261,23 +188,24 @@ export const curlEws: EwsTransport = (credentials, xml) =>
       ].join("\n") + "\n",
     );
   });
-const escapeXml = (value: string) =>
+export const escapeXml = (value: string) =>
   value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
-const array = (value: any): any[] =>
+export const array = (value: any): any[] =>
   value == null ? [] : Array.isArray(value) ? value : [value];
-const text = (value: any): string => String(value?.["#text"] ?? value ?? "");
-export class EwsCalendar implements CalendarProvider {
+export const text = (value: any): string =>
+  String(value?.["#text"] ?? value ?? "");
+export class EwsClient {
   constructor(
-    private accountId: string,
+    protected accountId: string,
     private credentials: EwsCredentials,
     private transport: EwsTransport = curlEws,
   ) {}
-  private async call(operation: string, contents: string, attributes = "") {
+  protected async call(operation: string, contents: string, attributes = "") {
     const xml = `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages"><s:Header><t:RequestServerVersion Version="Exchange2013_SP1"/><t:TimeZoneContext><t:TimeZoneDefinition Id="${exchangeZone}"/></t:TimeZoneContext></s:Header><s:Body><m:${operation} ${attributes}>${contents}</m:${operation}></s:Body></s:Envelope>`;
     const response = await this.transport(this.credentials, xml);
     if (
@@ -309,6 +237,8 @@ export class EwsCalendar implements CalendarProvider {
       }
     return messages;
   }
+}
+export class EwsCalendar extends EwsClient implements CalendarProvider {
   private event(item: any): CalendarEvent {
     const allDay = item.IsAllDayEvent === "true",
       recurring =

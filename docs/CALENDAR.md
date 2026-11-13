@@ -1,98 +1,127 @@
-# Kalender: Exchange Online och Exchange on-prem
+# E-post och kalender
 
-Öppna Kalender i sidhuvudet och välj Kalenderkonton. Varje anslutning använder
-kontots huvudkalender. Månad och agenda samlar kontona; kontofiltret visar en
-kalender i taget. Tider visas i Europe/Stockholm med sommar-/vintertid. För heldag
-är slutdatumet exklusivt: 14–15 november betyder en heldag den 14:e.
+Välj E-post eller Kalender i sidhuvudets Vy-meny. Konton öppnar gemensamma
+anslutningar. Microsoft 365 används för både e-post och kalender. Exchange
+on-prem ligger kvar som en separat EWS-anslutning; befintliga konton återanvänds.
 
-## Privat: Microsoft 365 / Exchange Online
+## Användaren: anslut Microsoft-konto
 
-1. Öppna https://entra.microsoft.com → Identity → Applications → App registrations → New registration.
-2. Namnge appen Kanban Calendar. Välj kontotyper som omfattar ditt konto:
-   egen tenant för Microsoft 365, eller även personliga Microsoft-konton för
-   Outlook.com. Ingen redirect URI behövs för device code-inloggningen.
-3. Under Authentication → Advanced settings: aktivera Allow public client flows.
-4. API permissions → Microsoft Graph → Delegated permissions → Calendars.ReadWrite.
-   Använd inte Application permissions. Godkänn administratörsmedgivande om
-   din tenant kräver det. Ingen client secret behövs.
-5. Kopiera Application (client) ID till Kanban. Tenant kan vara tenantens UUID,
-   organizations (arbetskonton), consumers (personliga Microsoft-konton) eller
-   common (båda, om appregistreringen tillåter det).
-6. Lägg till kontot, öppna Microsoft-länken som visas och ange koden. Välj rätt
-   Microsoft-konto. Lösenord och MFA anges endast hos Microsoft.
+Klicka Anslut Microsoft-konto, välj konto och godkänn läsåtkomst hos Microsoft.
+Inget Client ID, tenant, lösenord eller client secret anges i plattformens
+användarformulär. Efter inloggningen återvänder du till E-post. Samma anslutning
+används i kalendern. Om serverns appkonfiguration saknas visas det i Konton;
+administratören behöver då slutföra engångsinställningen nedan.
 
-Microsofts MSAL hanterar device code och förnyar åtkomsttoken via sin beständiga
-cache. Offlineåtkomst ingår i MSAL:s standard-OIDC-scopes. Organisationspolicy
-kan blockera public client/device code; då behöver IT tillåta appen. Ingen
-inloggningskod läggs i AI-kontext eller loggar.
+Alla som har tillgång till denna gemensamma LAN-installation kan läsa anslutna
+konton. Anslut bara konton som installationens användare är behöriga att läsa.
+AI-läsning kan stängas av per konto i Konton. Det påverkar både e-post och kalender.
 
-## Jobb: Exchange on-prem via EWS
+## Administratören: serverkonfiguration för Microsoft 365
 
-Be IT om EWS-adress (vanligen https://mail.foretaget.se/EWS/Exchange.asmx),
-autentisering och tillåtelse att ansluta appen. NTLM är standard. Basic stöds bara
-över verifierad HTTPS när EWS uttryckligen tillåter det. Användarnamn kan vara
-DOMÄN\användare eller UPN, beroende på serverns konfiguration.
+Skapa en Web-appregistrering i https://entra.microsoft.com. Välj kontotyper som
+omfattar dina användare: egen tenant, flera organisationer eller även personliga
+Microsoft-konton. Konfigurera exakt denna callback som Web redirect URI:
 
-Kanban-servern behöver nå EWS, eventuellt via VPN, och ha curl med NTLM-stöd.
-För företagets egen CA: installera rotcertifikatet i serverns betrodda CA-lager.
-TLS-verifiering stängs aldrig av. Omdirigeringar följs inte och uppgifterna går
-inte via proxy. EWS-inloggningen testas innan kontot sparas. Stöd kräver Exchange
-2013 SP1-kompatibelt EWS eller senare. Kerberos, ADFS/HMA och webbläsarformulär
-stöds inte av denna anslutning. Om jobbet enbart tillåter dessa behövs en
-IT-godkänd anslutningsväg. Byt EWS-lösenord genom att ta bort och återansluta kontot.
+    https://DIN-KANBAN-ADRESS/api/microsoft/callback
 
-## Manuella skrivningar och begränsningar
+Sätt serverns miljövariabler (eller skyddad .env, filrättighet 0600):
 
-Du kan skapa, läsa, ändra och radera egna fristående bokningar från gränssnittet.
-Skrivningar går direkt till Exchange; inget påstås vara sparat när Exchange
-inte kan nås. Radering kräver en andra bekräftelse. Samtidiga ändringar skyddas
-med Graph ETag respektive EWS ChangeKey. Efter ett nätfel vid sparande: läs in
-kalendern innan du försöker igen, eftersom Exchange kan ha hunnit spara.
+    MICROSOFT_CLIENT_ID=<Application (client) ID>
+    MICROSOFT_CLIENT_SECRET=<client secret-värdet, inte secret ID>
+    MICROSOFT_TENANT_ID=common
+    MICROSOFT_REDIRECT_URI=https://DIN-KANBAN-ADRESS/api/microsoft/callback
 
-Möten med deltagare och återkommande händelser/instanser visas. Ändra dem i
-Outlook för att behålla mötesinbjudningar, serier och möteslänkar. Denna version
-skickar inga inbjudningar och skapar inga serier. Andra kalenderfoldrar och delade
-kalendrar ingår inte i denna version.
+Registrera delegerade Microsoft Graph-behörigheter Mail.Read, Calendars.Read och
+User.Read. Inga Application permissions eller skrivbehörigheter används. Ge
+administratörsmedgivande om organisationens policy kräver det. Appen använder
+confidential-client authorization code flow med PKCE, state och nonce. MSAL lägger
+även till standard-OIDC-scopes för inloggning och offlineåtkomst. Public client-
+flöden och device codes används inte längre. Client secret stannar på servern.
+Rotera hemligheten innan den löper ut och starta om tjänsten efter ändrad miljö.
 
-## AI har endast läsåtkomst
+HTTPS-adressen måste nå Kanban via en TLS-terminerande proxy med korrekt Host och
+ett betrott certifikat. Microsoft tillåter HTTP endast för lokal utveckling med
+localhost/loopback. Serverns befintliga LAN-IP över HTTP kan därför inte användas
+som produktionscallback. Klick från LAN-adressen går först till den konfigurerade
+HTTPS-adressen så att OAuth-sessionens cookie hör till rätt värd. Callbackadressen
+hämtas aldrig från ett användarformulär eller en godtycklig redirect-parameter.
 
-AI:n har tre kalenderverktyg: list_calendar_accounts, list_calendar_events och
-get_calendar_event. Inget av dem kan skriva, radera, ändra konton eller bekräfta
-något. AI:n har inga generiska HTTP-, shell- eller SQL-verktyg. Skrivgränsen finns
-i serverns tillåtna verktygslista, utöver instruktionerna till modellen.
+Token förnyas med MSAL:s krypterade beständiga cache och rätt homeAccountId.
+Vid förnyad inloggning till samma konto återanvänds kopplingen och dess AI-val.
+Tidigare kalenderanslutningar med användarspecifika appinställningar eller
+Calendars.ReadWrite-cache kopplas från lokalt och behöver anslutas igen med den
+nya serverappen. On-prem-uppgifter ändras inte. Tidigare Microsoft-medgivanden
+kan återkallas i Microsoft om de gamla bredare behörigheterna inte längre behövs.
 
-Calendars.ReadWrite behövs för dina manuella skrivningar. AI:n får aldrig token
-eller lösenord. Avmarkera "AI får läsa denna kalender" per konto för att utesluta
-kontot även från AI-läsning och kontext. Kalendertext är opålitlig data och får
-inte styra andra verktyg eller sparas som minne utan en uttrycklig användarbegäran.
-Kalenderläsningar loggas med antal/felstatus, manuella ändringar med konto-ID och
-operation. Händelsetexter och hemligheter loggas inte som kalenderverktygsresultat.
+## Exchange on-prem
 
-## Drift, åtkomst och backup
+Befintliga EWS-konton används direkt även för e-post. Lägg vid behov till ett
+nytt konto i Konton → Lägg till Exchange on-prem. Ange EWS-adress, användarnamn,
+lösenord och NTLM eller Basic över verifierad HTTPS. Servern behöver nå EWS,
+eventuellt via VPN. För intern CA: installera rotcertifikatet i serverns betrodda
+CA-lager. Ingen TLS-bypass eller omdirigering används. curl med NTLM-stöd krävs.
+EWS 2013 SP1-kompatibelt API eller senare krävs. Kerberos/ADFS/HMA stöds inte av
+anslutningen. Fråga IT om organisationen bara tillåter sådan autentisering.
+Ett tillåtet kalenderkonto kan fortfarande sakna rätt till e-post; läsfelet visas
+när e-post öppnas. Byt lösenord genom att ta bort och ansluta kopplingen igen.
 
-Kanban är en gemensam LAN-installation. De som kan använda installationen kan
-läsa anslutna kalendrar och göra manuella ändringar. Anslut bara konton om dessa
-personer är behöriga. Använd en betrodd anslutning till Kanban vid anslutning.
+## Vad kan läsas och skrivas?
 
-Kontoinställningar, lösenord och MSAL-cache krypteras med AES-256-GCM i tabellen
-calendar_accounts i befintlig SQLite. calendar.key ligger bredvid databasen med
-filrättighet 0600. CALENDAR_KEY_PATH kan ange en annan absolut sökväg. Hemligheter
-sparas inte i Git, webbläsarlagring, AI-minne eller loggar. Ta säker backup av både
-SQLite och nyckeln; skydda dem separat. En saknad nyckel ersätts inte om konton
-redan finns. Ta bort koppling raderar lokal anslutning och lokala token, aldrig
-Exchange-händelser. Återkalla appmedgivandet i Microsoft separat om du också vill
-återkalla Microsoft-sessioner. Påbörja ny device code-inloggning efter en omstart.
+E-post: läs och sök i Inkorg eller Skickat på valt konto, med Visa fler för nästa
+sida. Sökningen är avgränsad till vald mapp. Graph/EWS tolkar sökord och stödjer
+bland annat from:/subject:-uttryck enligt respektive servers söksyntax. Söksyntax
+och indexering kan skilja sig mellan servrar. Resultat är inga bevis för att ett
+mejl saknas i andra mappar. Arkiv, delade brevlådor och andra mappar ingår inte.
+Listningen är begränsad till 1000 sidpositioner. Mejldetaljer visas som säker text;
+HTML körs inte, externa bilder/länkar och bilagor hämtas inte. Text över 30000
+tecken förkortas tydligt. Inga funktioner finns för att skicka, ändra, radera,
+flytta eller markera mejl som lästa/olästa. En läsning ändrar inte lässtatus.
 
-Händelser lagras inte lokalt utan läses direkt från Exchange. Vyn uppdateras varje
-minut när sidan är synlig. Fel visas per konto även om andra konton fungerar.
-Graph läser högst fem sidor om 100 händelser, EWS högst 500. Begränsade resultat
-markeras tydligt. AI-läsningar har dessutom sidindelning i verktygsresultatet.
+Kalender: månad/agenda för kontots huvudkalender. Europe/Stockholm används med
+sommar-/vintertid. Microsoft 365-kalendern är helt skrivskyddad, även manuellt.
+Befintlig on-prem-kalender kan fortfarande hantera egna fristående bokningar
+manuellt; möten och återkommande serier ändras i Outlook. Radering kräver en extra
+bekräftelse. Samtidiga on-prem-ändringar skyddas med ChangeKey. Heldagars slutdatum
+är exklusivt: 14–15 november betyder en heldag den 14:e. Graph läser högst 500
+händelser, EWS 500, med markering av begränsat resultat.
 
-## Microsofts referenser
+## AI, källor och analys
 
-- Graph kalenderläsning: https://learn.microsoft.com/en-us/graph/api/calendar-list-calendarview?view=graph-rest-1.0
-- Graph skrivningar: https://learn.microsoft.com/en-us/graph/api/event-update?view=graph-rest-1.0
-- MSAL device code: https://learn.microsoft.com/en-us/entra/msal/javascript/node/acquire-token-requests
-- EWS autentisering: https://learn.microsoft.com/en-us/exchange/client-developer/exchange-web-services/authentication-and-ews-in-exchange
-- EWS kalenderläsning: https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/finditem-operation
-- EWS skrivningar: https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/createitem-operation-calendar-item
+Inga automatiska analyser, AI-scheman eller bakgrundsskanningar startas.
+E-post läses när vyn öppnas, söks eller uppdateras. Kalenderns synliga vy kan
+uppdatera händelselistan varje minut; detta startar ingen AI-analys.
+
+Öppna ett mejl och be AI:n exempelvis: "Sammanfatta det här och jämför med mitt
+valda Kanban-kort." Valda mejlets konto och ID följer med jobbet; AI:n läser
+själva källan med get_mail. Användaren kan rensa vald källa i AI-panelen. AI:n kan
+också söka på begäran med list_mail_accounts, search_mail och get_mail samt läsa
+kalender med list_calendar_accounts, list_calendar_events och get_calendar_event.
+Kanban-verktygen används för att förstå relaterade kort. Kalender/mejltext är
+opålitligt underlag, aldrig instruktioner eller tillstånd att ändra tavlor/minnen.
+AI:n får aldrig token eller inloggningsuppgifter. Den har inga mejlskrivverktyg
+och ingen kalenderförändring. Den kan ge ett textutkast i chatten om du ber om det.
+Ett beställt AI-jobbs meddelande och sammanfattning sparas i befintlig chatthistorik;
+råa mejl och bilagor synkroniseras inte till en lokal databas. AI:n ska inte spara
+mejlinnehåll som varaktigt minne utan en uttrycklig begäran.
+
+## Drift och backup
+
+Befintlig AES-256-GCM-lagring och calendar.key återanvänds för EWS-uppgifter och
+MSAL-cache. Nyckeln har rättighet 0600 och ska skyddas och säkerhetskopieras
+separat tillsammans med SQLite. CALENDAR_KEY_PATH kan ange en annan absolut
+sökväg. Ta bort koppling tar bara bort lokal anslutning och token; inga mejl eller
+händelser raderas. Återkalla Microsoft-medgivandet hos Microsoft separat vid behov.
+OAuth-state är kortlivad, engångs och bunden till en HttpOnly/SameSite-cookie.
+Efter omstart eller tio minuter behöver en påbörjad inloggning startas om.
+Loggar innehåller operation, kontoreferens och antal/status; inga råa mejlkroppar,
+söktexter, authorization codes eller token loggas av integrationsverktygen.
+
+## Microsofts dokumentation
+
+- https://learn.microsoft.com/en-us/entra/msal/javascript/node/acquire-token-requests
+- https://learn.microsoft.com/en-us/entra/identity-platform/reply-url
+- https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0
+- https://learn.microsoft.com/en-us/graph/search-query-parameter
+- https://learn.microsoft.com/en-us/graph/api/calendar-list-calendarview?view=graph-rest-1.0
+- https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/finditem-operation
+- https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/getitem-operation

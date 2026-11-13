@@ -1,4 +1,6 @@
 import {
+  createHash,
+  timingSafeEqual,
   createCipheriv,
   createDecipheriv,
   randomBytes,
@@ -7,9 +9,8 @@ import {
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
-  PublicClientApplication,
+  ConfidentialClientApplication,
   type Configuration,
-  type DeviceCodeRequest,
 } from "@azure/msal-node";
 import { z } from "zod";
 import {
@@ -27,6 +28,14 @@ import {
   type EwsTransport,
 } from "./calendar-providers.js";
 import { Store, HttpError } from "./store.js";
+import { GraphReader } from "./graph.js";
+import { EwsMail, GraphMail, type MailReader } from "./mail-providers.js";
+import { mailSearch, type MailPage } from "../shared/mail.js";
+import {
+  microsoftFromEnv,
+  microsoftScopes,
+  type MicrosoftConfig,
+} from "./microsoft.js";
 
 type Row = {
   id: string;
@@ -39,15 +48,21 @@ type Secret = CalendarAccountInput & {
   cache?: string;
   connected?: boolean;
   home_account_id?: string;
+  app_client_id?: string;
+  policy?: string;
 };
 type Options = {
   key?: Buffer;
   keyPath?: string;
   request?: typeof fetch;
   ews?: EwsTransport;
-  clientFactory?: (configuration: Configuration) => PublicClientApplication;
+  microsoft?: MicrosoftConfig;
+  clientFactory?: (
+    configuration: Configuration,
+  ) => ConfidentialClientApplication;
 };
-const scopes = ["https://graph.microsoft.com/Calendars.ReadWrite"];
+const scopes = microsoftScopes;
+const policy = "microsoft-read-v1";
 const safeError = (error: unknown) =>
   error instanceof HttpError
     ? error.message
@@ -58,13 +73,15 @@ export class CalendarService {
   private flows = new Map<
     string,
     {
-      request: DeviceCodeRequest;
-      login?: CalendarAccount["login"];
-      error?: string;
-      running: boolean;
+      id: string;
+      verifier: string;
+      nonce: string;
+      browser: Buffer;
+      expires: number;
     }
   >();
-  private clients = new Map<string, PublicClientApplication>();
+  private clients = new Map<string, ConfidentialClientApplication>();
+  private microsoft: MicrosoftConfig | undefined;
   private locks = new Map<string, Promise<unknown>>();
   private closed = false;
   constructor(
@@ -75,6 +92,7 @@ export class CalendarService {
       detail: Record<string, unknown>,
     ) => void = () => {},
   ) {
+    this.microsoft = options.microsoft ?? microsoftFromEnv();
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS calendar_accounts (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('online','onprem')),
       allow_ai INTEGER NOT NULL DEFAULT 1, secret TEXT NOT NULL, created_at TEXT NOT NULL)`);
@@ -99,6 +117,21 @@ export class CalendarService {
     }
     if (this.key.length !== 32)
       throw new Error("Kalenderns krypteringsnyckel måste vara 32 byte.");
+    // Retire per-user app settings and every old ReadWrite cache before exposing Graph.
+    for (const row of this.store.db
+      .prepare("SELECT * FROM calendar_accounts WHERE kind='online'")
+      .all() as Row[]) {
+      const previous = this.secret(row);
+      if (previous.policy !== policy)
+        this.save(row, {
+          kind: "online",
+          name: row.name,
+          allow_ai: !!row.allow_ai,
+          home_account_id: previous.home_account_id,
+          connected: false,
+          policy,
+        });
+    }
   }
   private seal(id: string, value: Secret) {
     const iv = randomBytes(12),
@@ -154,15 +187,16 @@ export class CalendarService {
     )
       .filter((row) => !ai || row.allow_ai)
       .map((row) => {
-        const flow = this.flows.get(row.id);
         return {
           id: row.id,
           name: row.name,
           kind: row.kind,
           allow_ai: !!row.allow_ai,
-          connected: !!this.secret(row).connected,
-          ...(!ai && flow?.login && flow.running ? { login: flow.login } : {}),
-          ...(!ai && flow?.error ? { error: flow.error } : {}),
+          connected:
+            !!this.secret(row).connected &&
+            (row.kind === "onprem" ||
+              (!!this.microsoft &&
+                this.secret(row).app_client_id === this.microsoft.clientId)),
         };
       });
   }
@@ -170,6 +204,8 @@ export class CalendarService {
     const input = accountInput.parse(value);
     if (this.accounts().length >= 8)
       throw new HttpError(409, "Högst åtta kalenderkonton kan anslutas.");
+    if (input.kind === "online")
+      throw new HttpError(400, "Använd Anslut Microsoft-konto.");
     const id = randomUUID();
     if (input.kind === "onprem") {
       const now = new Date();
@@ -206,12 +242,6 @@ export class CalendarService {
   }
   remove(id: string) {
     this.row(id);
-    const flow = this.flows.get(id);
-    if (flow) {
-      flow.request.cancel = true;
-      flow.running = false;
-    }
-    this.flows.delete(id);
     this.clients.delete(id);
     this.store.db.prepare("DELETE FROM calendar_accounts WHERE id=?").run(id);
     this.audit("calendar.account_removed", { account_id: id });
@@ -220,12 +250,13 @@ export class CalendarService {
     let client = this.clients.get(id);
     if (client) return client;
     const config = this.secret(this.row(id));
-    if (config.kind !== "online")
+    if (config.kind !== "online" || !this.microsoft)
       throw new HttpError(400, "Kontot använder EWS-inloggning.");
     const configuration: Configuration = {
       auth: {
-        clientId: config.client_id,
-        authority: `https://login.microsoftonline.com/${config.tenant}`,
+        clientId: this.microsoft.clientId,
+        clientSecret: this.microsoft.clientSecret,
+        authority: `https://login.microsoftonline.com/${this.microsoft.tenant}`,
       },
       system: {
         loggerOptions: { piiLoggingEnabled: false, loggerCallback: () => {} },
@@ -257,65 +288,192 @@ export class CalendarService {
     };
     client = this.options.clientFactory
       ? this.options.clientFactory(configuration)
-      : new PublicClientApplication(configuration);
+      : new ConfidentialClientApplication(configuration);
     this.clients.set(id, client);
     return client;
   }
-  login(id: string) {
-    const row = this.row(id);
-    if (row.kind !== "online")
+  microsoftStatus() {
+    return {
+      configured: !!this.microsoft,
+      connect_url: this.microsoft
+        ? new URL(
+            "/api/microsoft/connect",
+            this.microsoft.redirectUri,
+          ).toString()
+        : null,
+      message: this.microsoft
+        ? "Läsåtkomst till e-post, kalender och kontoprofil."
+        : "Microsoft-inloggningen väntar på serveradministratörens appkonfiguration.",
+    };
+  }
+  microsoftOrigin() {
+    return this.microsoft
+      ? new URL(this.microsoft.redirectUri).origin
+      : undefined;
+  }
+  async beginMicrosoft(browser: string) {
+    if (!this.microsoft)
+      throw new HttpError(503, this.microsoftStatus().message);
+    const now = Date.now();
+    for (const [state, flow] of this.flows)
+      if (flow.expires <= now) this.flows.delete(state);
+    if (this.flows.size >= 32 || this.accounts().length >= 8)
       throw new HttpError(
-        400,
-        "EWS-kontot använder användarnamn och lösenord.",
+        429,
+        "För många anslutningar. Ta bort en koppling eller försök igen senare.",
       );
-    if (this.flows.get(id)?.running) return;
-    const client = this.client(id);
-    const flow: {
-      request: DeviceCodeRequest;
-      login?: CalendarAccount["login"];
-      error?: string;
-      running: boolean;
-    } = {
-      running: true,
-      request: {
-        scopes,
-        timeout: 900,
-        deviceCodeCallback: (response) => {
-          if (!flow.running) return;
-          flow.login = {
-            code: response.userCode,
-            url: response.verificationUri,
-            expires_at: new Date(
-              Date.now() + response.expiresIn * 1000,
-            ).toISOString(),
-          };
-        },
+    const state = randomBytes(32).toString("base64url"),
+      id = randomUUID(),
+      verifier = randomBytes(48).toString("base64url"),
+      nonce = randomBytes(32).toString("base64url");
+    this.flows.set(state, {
+      id,
+      verifier,
+      nonce,
+      browser: createHash("sha256").update(browser).digest(),
+      expires: now + 600000,
+    });
+    const configuration: Configuration = {
+      auth: {
+        clientId: this.microsoft.clientId,
+        clientSecret: this.microsoft.clientSecret,
+        authority: `https://login.microsoftonline.com/${this.microsoft.tenant}`,
+      },
+      system: {
+        loggerOptions: { piiLoggingEnabled: false, loggerCallback: () => {} },
       },
     };
-    this.flows.set(id, flow);
-    void client
-      .acquireTokenByDeviceCode(flow.request)
-      .then((result) => {
-        if (!flow.running || this.closed || !result?.account) return;
-        const current = this.row(id);
-        this.save(current, {
-          ...this.secret(current),
-          connected: true,
-          home_account_id: result.account.homeAccountId,
-        });
-        this.audit("calendar.login_completed", { account_id: id });
-      })
-      .catch(() => {
-        if (flow.running && !this.closed) {
-          flow.error =
-            "Microsoft-inloggningen avbröts eller nekades. Kontrollera appregistrering, public client-flöde och medgivande. Försök igen.";
-          this.audit("calendar.login_failed", { account_id: id });
-        }
-      })
-      .finally(() => {
-        flow.running = false;
-        flow.login = undefined;
+    const client = this.options.clientFactory
+      ? this.options.clientFactory(configuration)
+      : new ConfidentialClientApplication(configuration);
+    try {
+      return await client.getAuthCodeUrl({
+        scopes,
+        state,
+        nonce,
+        redirectUri: this.microsoft.redirectUri,
+        codeChallenge: createHash("sha256")
+          .update(verifier)
+          .digest("base64url"),
+        codeChallengeMethod: "S256",
+        prompt: "select_account",
       });
+    } catch {
+      this.flows.delete(state);
+      throw new HttpError(
+        502,
+        "Kunde inte starta Microsoft-inloggningen. Kontrollera serverns appkonfiguration.",
+      );
+    }
+  }
+  async finishMicrosoft(state: string, browser: string, code?: string) {
+    const flow = this.flows.get(state);
+    this.flows.delete(state); // A callback is single use, including denied attempts.
+    if (
+      !flow ||
+      flow.expires <= Date.now() ||
+      !timingSafeEqual(
+        flow.browser,
+        createHash("sha256").update(browser).digest(),
+      ) ||
+      !this.microsoft
+    )
+      throw new HttpError(
+        400,
+        "Microsoft-inloggningen har gått ut eller saknar rätt webbläsarsession. Försök ansluta igen.",
+      );
+    if (!code)
+      throw new HttpError(400, "Microsoft-inloggningen avbröts eller nekades.");
+    if (this.accounts().length >= 8)
+      throw new HttpError(409, "Högst åtta konton kan anslutas.");
+    const initial: Secret = {
+      kind: "online",
+      name: "Microsoft 365",
+      allow_ai: true,
+      connected: false,
+      policy,
+      app_client_id: this.microsoft.clientId,
+    };
+    this.store.db
+      .prepare(
+        "INSERT INTO calendar_accounts(id,name,kind,allow_ai,secret,created_at) VALUES(?,?,?,?,?,?)",
+      )
+      .run(
+        flow.id,
+        initial.name,
+        "online",
+        1,
+        this.seal(flow.id, initial),
+        new Date().toISOString(),
+      );
+    try {
+      const result = await this.client(flow.id).acquireTokenByCode({
+        code,
+        scopes,
+        redirectUri: this.microsoft.redirectUri,
+        codeVerifier: flow.verifier,
+      });
+      if (
+        !result?.account ||
+        (result.idTokenClaims as Record<string, unknown> | undefined)?.nonce !==
+          flow.nonce
+      )
+        throw new Error("Invalid Microsoft identity");
+      // Profile is obtained with the same delegated User.Read grant; no mail is read during sign-in.
+      const profile = await new GraphReader(
+        async () => result.accessToken,
+        this.options.request,
+      ).get("me?$select=displayName,mail,userPrincipalName");
+      const name = String(
+        profile.displayName ||
+          profile.mail ||
+          profile.userPrincipalName ||
+          "Microsoft 365",
+      ).slice(0, 80);
+      const row = this.row(flow.id),
+        secret = this.secret(row);
+      const existing = (
+        this.store.db
+          .prepare(
+            "SELECT * FROM calendar_accounts WHERE kind='online' AND id!=?",
+          )
+          .all(flow.id) as Row[]
+      ).find(
+        (r) => this.secret(r).home_account_id === result.account!.homeAccountId,
+      );
+      const destination = existing ?? row;
+      this.save(destination, {
+        ...secret,
+        name,
+        connected: true,
+        home_account_id: result.account.homeAccountId,
+      });
+      this.store.db
+        .prepare("UPDATE calendar_accounts SET name=? WHERE id=?")
+        .run(name, destination.id);
+      if (existing) {
+        this.clients.delete(destination.id);
+        this.store.db
+          .prepare("DELETE FROM calendar_accounts WHERE id=?")
+          .run(flow.id);
+      }
+      this.audit("microsoft.connected", {
+        account_id: destination.id,
+        permissions: ["Mail.Read", "Calendars.Read", "User.Read"],
+      });
+      return destination.id;
+    } catch {
+      this.store.db
+        .prepare("DELETE FROM calendar_accounts WHERE id=?")
+        .run(flow.id);
+      this.audit("microsoft.login_failed", {});
+      throw new HttpError(
+        502,
+        "Microsoft-inloggningen misslyckades. Kontrollera serverns appkonfiguration och medgivandet och försök igen.",
+      );
+    } finally {
+      this.clients.delete(flow.id);
+    }
   }
   private async token(id: string) {
     try {
@@ -330,14 +488,18 @@ export class CalendarService {
     } catch {
       throw new HttpError(
         502,
-        "Microsoft-inloggningen behöver förnyas. Öppna Kalenderkonton och logga in igen.",
+        "Microsoft-inloggningen behöver förnyas. Använd Anslut Microsoft-konto igen.",
       );
     }
   }
   private provider(id: string, ai = false): CalendarProvider {
     const row = this.row(id, ai),
       secret = this.secret(row);
-    if (!secret.connected)
+    if (
+      !secret.connected ||
+      (row.kind === "online" &&
+        (!this.microsoft || secret.app_client_id !== this.microsoft.clientId))
+    )
       throw new HttpError(
         409,
         "Kontot väntar på inloggning. Öppna Kalenderkonton.",
@@ -407,6 +569,8 @@ export class CalendarService {
     version?: string,
     value?: unknown,
   ) {
+    if (this.row(id).kind === "online")
+      throw new HttpError(403, "Microsoft 365-kalendern är skrivskyddad.");
     const input = action === "delete" ? undefined : calendarDraft.parse(value);
     await this.serial(id, async () => {
       const provider = this.provider(id);
@@ -417,11 +581,37 @@ export class CalendarService {
     });
     this.audit(`calendar.${action}`, { account_id: id, actor: "user" });
   }
+  private mailProvider(id: string, ai: boolean): MailReader {
+    const row = this.row(id, ai),
+      secret = this.secret(row);
+    if (!this.accounts(ai).some((a) => a.id === id && a.connected))
+      throw new HttpError(409, "Kontot behöver anslutas igen.");
+    return secret.kind === "online"
+      ? new GraphMail(id, () => this.token(id), this.options.request)
+      : new EwsMail(id, secret, this.options.ews);
+  }
+  async searchMail(value: unknown, ai = false): Promise<MailPage> {
+    const input = mailSearch.parse(value);
+    const result = await this.serial(input.account_id, () =>
+      this.mailProvider(input.account_id, ai).search(input),
+    );
+    this.audit("mail.search", {
+      account_id: input.account_id,
+      reader: ai ? "ai" : "user",
+      result_count: result.messages.length,
+      folder: input.folder,
+    });
+    return result;
+  }
+  async getMail(id: string, mailId: string, ai = false) {
+    const result = await this.serial(id, () =>
+      this.mailProvider(id, ai).get(mailId),
+    );
+    this.audit("mail.read", { account_id: id, reader: ai ? "ai" : "user" });
+    return result;
+  }
   close() {
     this.closed = true;
-    for (const flow of this.flows.values()) {
-      flow.request.cancel = true;
-      flow.running = false;
-    }
+    this.flows.clear();
   }
 }

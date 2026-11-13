@@ -12,6 +12,7 @@ import type {
   Task,
   AiWork,
   AiJob,
+  ExternalContext,
 } from "../shared/schema.js";
 import { api } from "./api.js";
 import { JobRail } from "./JobRail.js";
@@ -25,9 +26,16 @@ const Calendar = lazy(() =>
   import("./Calendar.js").then((module) => ({ default: module.Calendar })),
 );
 
+const Mail = lazy(() =>
+  import("./Mail.js").then((module) => ({ default: module.Mail })),
+);
 const NEW_BOARD = "__new_board";
 
 export default function App() {
+  const [externalContext, setExternalContext] = useState<ExternalContext>();
+  const [mailOpen, setMailOpen] = useState(() =>
+    window.location.hash.startsWith("#mail"),
+  );
   const [calendarOpen, setCalendarOpen] = useState(
     () => window.location.hash === "#calendar",
   );
@@ -319,22 +327,28 @@ export default function App() {
             </svg>
           </a>
           <h1 className="sr-only">Kanban</h1>
-          <button
-            className={`button calendar-nav ${calendarOpen ? "active" : ""}`}
-            aria-pressed={calendarOpen}
-            onClick={() => {
-              setCalendarOpen((v) => !v);
+          <label className="sr-only" htmlFor="app-view">
+            Vy
+          </label>
+          <select
+            id="app-view"
+            className="view-select"
+            value={mailOpen ? "mail" : calendarOpen ? "calendar" : "boards"}
+            onChange={(e) => {
+              setCalendarOpen(e.target.value === "calendar");
+              setMailOpen(e.target.value === "mail");
               window.history.replaceState(
                 null,
                 "",
-                calendarOpen ? "/" : "#calendar",
+                e.target.value === "boards" ? "/" : `#${e.target.value}`,
               );
             }}
           >
-            <Icon name="calendar" size={16} />
-            {calendarOpen ? "Tavlor" : "Kalender"}
-          </button>
-          {workspace && !calendarOpen && (
+            <option value="boards">Tavlor</option>
+            <option value="calendar">Kalender</option>
+            <option value="mail">E-post</option>
+          </select>
+          {workspace && !calendarOpen && !mailOpen && (
             <>
               <label className="sr-only" htmlFor="board-picker">
                 Tavla
@@ -409,7 +423,7 @@ export default function App() {
             <span className="ai-label">AI-assistent</span>
             <span className="sr-only">, {statusText}</span>
           </button>
-          {!calendarOpen && (
+          {!calendarOpen && !mailOpen && (
             <button
               className="button primary"
               aria-label="Ny uppgift"
@@ -426,7 +440,17 @@ export default function App() {
       </header>
       <div className="workspace">
         <main className="board-area" inert={aiOpen && mobile}>
-          {calendarOpen ? (
+          {mailOpen ? (
+            <Suspense
+              fallback={
+                <p role="status" className="board-loading">
+                  Öppnar e-post…
+                </p>
+              }
+            >
+              <Mail onSelection={setExternalContext} />
+            </Suspense>
+          ) : calendarOpen ? (
             <Suspense
               fallback={
                 <p role="status" className="board-loading">
@@ -434,7 +458,7 @@ export default function App() {
                 </p>
               }
             >
-              <Calendar />
+              <Calendar onSelection={setExternalContext} />
             </Suspense>
           ) : (
             <>
@@ -532,6 +556,8 @@ export default function App() {
             status={status}
             workspace={workspace}
             selectedTask={selected}
+            externalContext={externalContext}
+            onClearExternal={() => setExternalContext(undefined)}
             sprintId={
               workspace.board.kind === "scrum" ? selectedSprint?.id : undefined
             }

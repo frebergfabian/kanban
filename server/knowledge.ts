@@ -44,6 +44,7 @@ export class Knowledge {
  CREATE TABLE IF NOT EXISTS ai_conversations(id TEXT PRIMARY KEY,title TEXT NOT NULL,board_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,summary TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS ai_jobs(id TEXT PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,conversation_id TEXT NOT NULL REFERENCES ai_conversations(id),board_id TEXT NOT NULL,task_id TEXT,sprint_id TEXT,message TEXT NOT NULL,status TEXT NOT NULL,stage TEXT NOT NULL DEFAULT 'understanding',position INTEGER NOT NULL,progress TEXT NOT NULL DEFAULT '',result TEXT NOT NULL DEFAULT '',error TEXT,receipts TEXT NOT NULL DEFAULT '[]',created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT,dismissed INTEGER NOT NULL DEFAULT 0);
  CREATE INDEX IF NOT EXISTS ai_jobs_queue ON ai_jobs(status,position);
+ CREATE TABLE IF NOT EXISTS ai_external_context(job_id TEXT PRIMARY KEY REFERENCES ai_jobs(id), context TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS ai_messages(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES ai_conversations(id),job_id TEXT NOT NULL REFERENCES ai_jobs(id),role TEXT NOT NULL CHECK(role IN ('user','assistant')),content TEXT NOT NULL,created_at TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS ai_messages_conversation ON ai_messages(conversation_id,created_at);
  CREATE TABLE IF NOT EXISTS ai_memories(id TEXT PRIMARY KEY,key TEXT NOT NULL,content TEXT NOT NULL,kind TEXT NOT NULL,board_id TEXT,source_message_id TEXT,source TEXT NOT NULL,uses INTEGER NOT NULL DEFAULT 0,deleted INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -185,7 +186,13 @@ export class Knowledge {
       .prepare("SELECT * FROM ai_jobs WHERE id=?")
       .get(id);
     if (!row) throw new HttpError(404, "AI-jobbet finns inte.");
-    return this.parseJob(row);
+    const context = this.store.db
+      .prepare("SELECT context FROM ai_external_context WHERE job_id=?")
+      .get(id) as { context: string } | undefined;
+    return {
+      ...this.parseJob(row),
+      ...(context ? { external_context: JSON.parse(context.context) } : {}),
+    };
   }
   memories(query = "", boardId?: string, all = false) {
     return this.store.db

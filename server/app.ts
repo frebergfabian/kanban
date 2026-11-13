@@ -14,11 +14,13 @@ import {
   sprintSchema,
   sprintEditSchema,
   toolSchemas,
+  externalContextSchema,
 } from "../shared/schema.js";
 import { Store, HttpError } from "./store.js";
 import { JobQueue } from "./jobs.js";
 import { Assistant, newSession, type Session } from "./ai.js";
 import { calendarRoutes } from "./calendar-routes.js";
+import { mailRoutes, microsoftRoutes } from "./integration-routes.js";
 
 export function createApp(store: Store, assistant: Assistant) {
   const app = express();
@@ -57,6 +59,10 @@ export function createApp(store: Store, assistant: Assistant) {
     if (
       hostname !== "localhost" &&
       !isIP(hostname) &&
+      hostname !==
+        (assistant.calendar?.microsoftOrigin()
+          ? new URL(assistant.calendar.microsoftOrigin()!).hostname
+          : undefined) &&
       hostname !== process.env.HOST
     )
       return next(
@@ -85,6 +91,10 @@ export function createApp(store: Store, assistant: Assistant) {
   app.use(express.json({ limit: "128kb" }));
   if (assistant.calendar)
     app.use("/api/calendar", calendarRoutes(assistant.calendar));
+  if (assistant.calendar) {
+    app.use("/api/microsoft", microsoftRoutes(assistant.calendar));
+    app.use("/api/mail", mailRoutes(assistant.calendar));
+  }
   const sessions = new Map<string, Session>();
   function session(req: express.Request, res: express.Response) {
     const now = Date.now();
@@ -130,6 +140,7 @@ export function createApp(store: Store, assistant: Assistant) {
         board_id: idSchema.optional(),
         task_id: idSchema.optional(),
         sprint_id: idSchema.nullable().optional(),
+        external_context: externalContextSchema.optional(),
       })
       .strict()
       .parse(req.body);
@@ -497,12 +508,13 @@ export function createApp(store: Store, assistant: Assistant) {
     res.json(await assistant.status()),
   );
   app.post("/api/ai/chat", async (req, res) => {
-    const { message, board_id, task_id, sprint_id } = z
+    const { message, board_id, task_id, sprint_id, external_context } = z
       .object({
         message: z.string().trim().min(1).max(8000),
         board_id: idSchema.optional(),
         task_id: idSchema.optional(),
         sprint_id: idSchema.nullable().optional(),
+        external_context: externalContextSchema.optional(),
       })
       .strict()
       .parse(req.body);
@@ -528,7 +540,7 @@ export function createApp(store: Store, assistant: Assistant) {
         if (!res.destroyed) res.write(JSON.stringify(event) + "\n");
       },
       abort.signal,
-      { board_id: boardId, task_id, sprint_id },
+      { board_id: boardId, task_id, sprint_id, external_context },
     );
     res.end();
   });

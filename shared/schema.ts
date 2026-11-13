@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { calendarId, calendarRange } from "./calendar.js";
+import { mailSearch } from "./mail.js";
 
 export const statuses = ["todo", "in_progress", "done"] as const;
 export const labels = { todo: "Att göra", in_progress: "Pågår", done: "Klart" };
@@ -116,6 +117,9 @@ const page = {
   limit: z.number().int().min(1).max(60).default(30),
 };
 export const toolSchemas = {
+  list_mail_accounts: z.object({}).strict(),
+  search_mail: mailSearch,
+  get_mail: z.object({ account_id: z.uuid(), message_id: calendarId }).strict(),
   list_calendar_accounts: z.object({}).strict(),
   list_calendar_events: calendarRange.safeExtend({
     account_id: z.uuid().optional(),
@@ -365,10 +369,19 @@ export type ChatEvent =
   | { type: "progress"; message: string }
   | { type: "error"; message: string };
 export type AiStatus = { available: boolean; model: string; message: string };
+export const externalContextSchema = z
+  .object({
+    kind: z.enum(["mail", "calendar"]),
+    account_id: z.uuid(),
+    item_id: calendarId,
+  })
+  .strict();
+export type ExternalContext = z.infer<typeof externalContextSchema>;
 export type ChatContext = {
   board_id?: string;
   task_id?: string;
   sprint_id?: string | null;
+  external_context?: ExternalContext;
 };
 
 export type JobStatus =
@@ -380,6 +393,7 @@ export type JobStatus =
   | "cancelled"
   | "interrupted";
 export type AiJob = {
+  external_context?: ExternalContext;
   id: string;
   conversation_id: string;
   board_id: string;

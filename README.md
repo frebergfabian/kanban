@@ -147,12 +147,16 @@ Dessa använder databaser i minnet och ändrar inte dina befintliga tavlor. De v
 | `docs/` | AI-handbok och arbetsinstruktioner. |
 | `tests/` | Automatiska tester och valfria Ollama-integrationstester. |
 
-### Kalender med Exchange
+### E-post och kalender
 
-Kalender i sidhuvudet har månad/agenda för flera konton: Exchange Online via
-Microsoft Graph och Exchange on-prem via EWS (NTLM eller Basic över HTTPS).
-Du kan skriva egna fristående bokningar i gränssnittet; AI:s tre kalenderverktyg
-är strikt skrivskyddade. Möten och återkommande händelser visas och ändras i
-Outlook. Anslut kontona i Kalenderkonton enligt [installationsguiden](docs/CALENDAR.md).
-Kalenderuppgifter och token krypteras med en separat lokal nyckel som ska ingå i
-säker backup. Kanban är en gemensam LAN-installation, även för kalenderåtkomst.
+Välj E-post eller Kalender i Vy-menyn. Gemensam Microsoft 365-anslutning använder
+serverns appkonfiguration och knappen Anslut Microsoft-konto (MSAL/OAuth 2.0,
+PKCE). Delegerade Mail.Read, Calendars.Read och User.Read ger endast läsåtkomst.
+Befintlig Exchange on-prem/EWS återanvänds separat för e-post; dess manuella
+kalenderfunktioner behålls. Mejlen kan aldrig skickas, ändras, raderas eller
+markeras lästa av appen. AI:n har separata läsverktyg och vald källa kan kopplas
+till Kanban-kontext på begäran. Inga automatiska AI-analyser sätts upp.
+
+[Installationsguide och servervariabler](docs/CALENDAR.md). Befintlig krypterad
+tokenlagring och calendar.key återanvänds. Installationens konton delas med dem
+som har tillgång till denna gemensamma LAN-installation.
