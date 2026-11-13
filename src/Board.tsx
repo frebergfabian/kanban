@@ -2,7 +2,8 @@ import { useState, type CSSProperties } from "react";
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
@@ -23,47 +24,50 @@ import {
   type Task,
   type Column as BoardColumn,
 } from "../shared/schema.js";
+import { Icon } from "./Icon.js";
 
 function CardContent({ task, done }: { task: Task; done: boolean }) {
   const overdue =
     task.due_date &&
     !done &&
     task.due_date < new Date().toLocaleDateString("sv-SE");
+  const hasMeta =
+    task.priority !== "normal" || task.due_date || task.post_count > 0;
   return (
     <>
       <span className="card-title">{task.title}</span>
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
-      {task.latest_post && (
-        <span className="card-latest">
-          <span className="card-latest-label">Senaste inlägg</span>
-          <span className="line-clamp-2">{task.latest_post}</span>
+      {hasMeta && (
+        <span className="card-meta">
+          {task.priority !== "normal" && (
+            <span className={`priority ${task.priority}`}>
+              <Icon name={task.priority === "high" ? "up" : "down"} size={14} />
+              {priorities[task.priority]}
+            </span>
+          )}
+          {task.due_date && (
+            <span className={`deadline ${overdue ? "overdue" : ""}`}>
+              <Icon name="calendar" size={14} />
+              <time dateTime={task.due_date}>
+                {new Date(`${task.due_date}T12:00:00`).toLocaleDateString(
+                  "sv-SE",
+                  { day: "numeric", month: "short" },
+                )}
+              </time>
+              {overdue && <span className="sr-only">, försenad</span>}
+            </span>
+          )}
+          {task.post_count > 0 && (
+            <span className="post-count">
+              <Icon name="comment" size={14} />
+              {task.post_count}
+              <span className="sr-only"> inlägg</span>
+            </span>
+          )}
         </span>
       )}
-      <span className="card-meta">
-        {task.priority !== "normal" && (
-          <span className={`priority ${task.priority}`}>
-            {task.priority === "high" ? "↑ " : "↓ "}
-            {priorities[task.priority]}
-          </span>
-        )}
-        {task.due_date && (
-          <span className={`deadline ${overdue ? "overdue" : ""}`}>
-            <time dateTime={task.due_date}>
-              {new Date(`${task.due_date}T12:00:00`).toLocaleDateString(
-                "sv-SE",
-                { day: "numeric", month: "short" },
-              )}
-            </time>
-          </span>
-        )}
-        {task.post_count > 0 && (
-          <span className="post-count">
-            {task.post_count} {task.post_count === 1 ? "inlägg" : "inlägg"}
-          </span>
-        )}
-      </span>
     </>
   );
 }
@@ -84,52 +88,63 @@ function Card({
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
   } = useSortable({ id: task.id, disabled });
+  // Mouse and touch drag the whole card; the keyboard drags via the handle so
+  // Enter/Space on the card still opens it.
+  const { onKeyDown, ...pointer } = listeners ?? {};
+  const child = task.child_board;
   return (
     <article
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`task-card group ${isDragging ? "dragging" : ""}`}
+      className={`task-card ${isDragging ? "dragging" : ""}`}
       data-task-id={task.id}
+      {...pointer}
+      onContextMenu={(e) => {
+        // Long-press starts a drag on touch screens; keep the context menu out of the way.
+        if ((e.nativeEvent as PointerEvent).pointerType === "touch")
+          e.preventDefault();
+      }}
     >
       <button
         className="card-open"
         onClick={() => onEdit(task)}
-        aria-label={`Redigera ${task.title}`}
+        aria-label={`Öppna ${task.title}`}
       >
         <CardContent task={task} done={done} />
       </button>
-      {task.child_board && (
+      {child && (
         <button
           className="child-board-link"
-          onClick={() => onOpenBoard(task.child_board!.id)}
+          onClick={() => onOpenBoard(child.id)}
         >
-          Scrum · {task.child_board.done_count}/{task.child_board.task_count}{" "}
-          klara →
+          <span>Scrum-tavla</span>
+          <span className="child-progress" aria-hidden="true">
+            <span
+              style={{
+                width: `${child.task_count ? (child.done_count / child.task_count) * 100 : 0}%`,
+              }}
+            />
+          </span>
+          <span>
+            {child.done_count}/{child.task_count}
+            <span className="sr-only"> klara</span>
+          </span>
         </button>
       )}
       <button
+        ref={setActivatorNodeRef}
         className="drag-handle"
         {...attributes}
-        {...listeners}
-        aria-label={`Dra ${task.title}`}
-        title="Dra för att flytta. Tangentbord: mellanslag, piltangenter, mellanslag."
+        onKeyDown={onKeyDown as React.KeyboardEventHandler | undefined}
+        aria-label={`Flytta ${task.title}`}
         disabled={disabled}
       >
-        <svg
-          width="14"
-          height="18"
-          viewBox="0 0 14 18"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          {[5, 9, 13].flatMap((y) =>
-            [5, 9].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1" />),
-          )}
-        </svg>
+        <Icon name="grip" size={16} />
       </button>
     </article>
   );
@@ -162,30 +177,33 @@ function Column({
       data-column-key={column.key}
     >
       <header className="column-header">
-        <h2 className="flex items-center gap-2.5 text-sm font-semibold min-w-0">
+        <h2>
           <span
             className={`column-dot ${column.is_done ? "done" : column.key === "in_progress" ? "in_progress" : ""}`}
+            aria-hidden="true"
           />
-          <span className="truncate" title={column.description || column.name}>
-            {column.name}
-          </span>
+          <span className="column-name">{column.name}</span>
           <span className="count">{tasks.length}</span>
         </h2>
-        <div className="flex shrink-0">
+        <div className="column-actions">
           <button
-            className="icon-button small"
+            className="icon-button"
+            data-tip="Redigera kolumn"
+            data-tip-end=""
             aria-label={`Redigera kolumn ${column.name}`}
             onClick={() => onColumnEdit(column)}
           >
-            ···
+            <Icon name="more" />
           </button>
           <button
-            className="icon-button small"
+            className="icon-button"
+            data-tip="Ny uppgift"
+            data-tip-end=""
             disabled={creationDisabled}
             aria-label={`Ny uppgift i ${column.name}`}
             onClick={() => onCreate(column.id)}
           >
-            +
+            <Icon name="plus" />
           </button>
         </div>
       </header>
@@ -208,7 +226,7 @@ function Column({
             />
           ))}
         </SortableContext>
-        {!tasks.length && <div className="empty-column">Inga uppgifter</div>}
+        {!tasks.length && <p className="empty-column">Inga uppgifter</p>}
       </div>
     </section>
   );
@@ -220,6 +238,7 @@ export function Board({
   onCreate,
   onMove,
   onColumnEdit,
+  onAddColumn,
   onOpenBoard,
   creationDisabled,
   disabled,
@@ -230,13 +249,18 @@ export function Board({
   onCreate: (id: string) => void;
   onMove: (id: string, columnId: string, position: number) => void;
   onColumnEdit: (column: BoardColumn) => void;
+  onAddColumn: () => void;
   onOpenBoard: (id: string) => void;
   creationDisabled?: boolean;
   disabled: boolean;
 }) {
   const [active, setActive] = useState<Task>();
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    // Press and hold to drag on touch, so a swipe still scrolls the board.
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 220, tolerance: 8 },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
@@ -299,6 +323,12 @@ export function Board({
             disabled={disabled}
           />
         ))}
+        <div className="add-column">
+          <button className="button ghost" onClick={onAddColumn}>
+            <Icon name="plus" size={16} />
+            Ny kolumn
+          </button>
+        </div>
       </div>
       <DragOverlay dropAnimation={null}>
         {active && (
