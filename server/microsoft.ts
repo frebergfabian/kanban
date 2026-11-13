@@ -12,7 +12,12 @@ export const microsoftConfigSchema = z.object({
     .union([z.uuid(), z.enum(["common", "organizations", "consumers"])])
     .default("common"),
   redirectUri: z.url().refine((value) => {
-    const u = new URL(value);
+    let u: URL;
+    try {
+      u = new URL(value);
+    } catch {
+      return false;
+    }
     return (
       !u.username &&
       !u.password &&
