@@ -63,6 +63,19 @@ type Options = {
 };
 const scopes = microsoftScopes;
 const policy = "microsoft-read-v1";
+// Only fixed protocol codes may enter the audit log; never serialize MSAL errors.
+const microsoftFailureCodes = new Set([
+  "nonce_mismatch",
+  "invalid_client",
+  "invalid_grant",
+  "invalid_request",
+  "unauthorized_client",
+  "invalid_scope",
+  "interaction_required",
+  "consent_required",
+  "endpoints_resolution_error",
+  "network_error",
+]);
 const safeError = (error: unknown) =>
   error instanceof HttpError
     ? error.message
@@ -406,13 +419,16 @@ export class CalendarService {
         this.seal(flow.id, initial),
         new Date().toISOString(),
       );
+    let stage = "token_exchange";
     try {
       const result = await this.client(flow.id).acquireTokenByCode({
         code,
         scopes,
         redirectUri: this.microsoft.redirectUri,
         codeVerifier: flow.verifier,
+        nonce: flow.nonce,
       });
+      stage = "identity_validation";
       if (
         !result?.account ||
         (result.idTokenClaims as Record<string, unknown> | undefined)?.nonce !==
@@ -420,6 +436,7 @@ export class CalendarService {
       )
         throw new Error("Invalid Microsoft identity");
       // Profile is obtained with the same delegated User.Read grant; no mail is read during sign-in.
+      stage = "profile_read";
       const profile = await new GraphReader(
         async () => result.accessToken,
         this.options.request,
@@ -430,6 +447,7 @@ export class CalendarService {
           profile.userPrincipalName ||
           "Microsoft 365",
       ).slice(0, 80);
+      stage = "account_save";
       const row = this.row(flow.id),
         secret = this.secret(row);
       const existing = (
@@ -462,11 +480,25 @@ export class CalendarService {
         permissions: ["Mail.Read", "Calendars.Read", "User.Read"],
       });
       return destination.id;
-    } catch {
+    } catch (error) {
       this.store.db
         .prepare("DELETE FROM calendar_accounts WHERE id=?")
         .run(flow.id);
-      this.audit("microsoft.login_failed", {});
+      const failure = error as { errorCode?: unknown; errorNo?: unknown } | null;
+      const code =
+        typeof failure?.errorCode === "string" &&
+        microsoftFailureCodes.has(failure.errorCode)
+          ? failure.errorCode
+          : "other";
+      const number =
+        typeof failure?.errorNo === "string" || typeof failure?.errorNo === "number"
+          ? String(failure.errorNo)
+          : "";
+      this.audit("microsoft.login_failed", {
+        stage,
+        code,
+        ...(/^\d{4,8}$/.test(number) ? { aadsts_code: number } : {}),
+      });
       throw new HttpError(
         502,
         "Microsoft-inloggningen misslyckades. Kontrollera serverns appkonfiguration och medgivandet och försök igen.",
