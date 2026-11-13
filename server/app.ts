@@ -21,6 +21,8 @@ import { JobQueue } from "./jobs.js";
 import { Assistant, newSession, type Session } from "./ai.js";
 import { calendarRoutes } from "./calendar-routes.js";
 import { mailRoutes, microsoftRoutes } from "./integration-routes.js";
+import { IntegrationSync } from "./integration-sync.js";
+import { syncRoutes } from "./sync-routes.js";
 
 export function createApp(store: Store, assistant: Assistant) {
   const app = express();
@@ -92,6 +94,9 @@ export function createApp(store: Store, assistant: Assistant) {
   if (assistant.calendar)
     app.use("/api/calendar", calendarRoutes(assistant.calendar));
   if (assistant.calendar) {
+    assistant.sync = new IntegrationSync(assistant);
+    app.locals.integrationSync = assistant.sync;
+    app.use("/api/sync", syncRoutes(assistant.sync));
     app.use("/api/microsoft", microsoftRoutes(assistant.calendar));
     app.use("/api/mail", mailRoutes(assistant.calendar));
   }
@@ -129,6 +134,7 @@ export function createApp(store: Store, assistant: Assistant) {
       conversations: knowledge.conversations(),
       pending: knowledge.pending(),
       revision: store.revision(),
+      ...(assistant.sync ? { sync: assistant.sync.summary() } : {}),
     }),
   );
   app.post("/api/ai/jobs", (req, res) => {
@@ -358,9 +364,22 @@ export function createApp(store: Store, assistant: Assistant) {
     res.json({ workspace });
   });
   app.get("/api/boards", (_req, res) => res.json({ boards: store.boards() }));
-  app.get("/api/boards/:id", (req, res) =>
-    res.json(store.workspace(idSchema.parse(req.params.id))),
-  );
+  app.get("/api/boards/:id", (req, res) => {
+    const workspace = store.workspace(idSchema.parse(req.params.id));
+    const scores = new Map(
+      (assistant.sync?.taskScores(workspace.board.id) ?? []).map((x: any) => [
+        x.task_id,
+        x,
+      ]),
+    );
+    res.json({
+      ...workspace,
+      tasks: workspace.tasks.map((task) => ({
+        ...task,
+        ...scores.get(task.id),
+      })),
+    });
+  });
   app.post("/api/boards", (req, res) => {
     const board = store.createBoard(boardSchema.parse(req.body));
     res.status(201).json({ board, workspace: store.workspace(board.id) });

@@ -594,6 +594,16 @@ export function TaskDialog({
                     </time>
                   </div>
                   <p className="activity-content">{post.content}</p>
+                  {post.content.match(
+                    /Indexreferens: ([0-9a-f-]{36})/i,
+                  )?.[1] && (
+                    <a
+                      className="text-button"
+                      href={`#sync?source=${post.content.match(/Indexreferens: ([0-9a-f-]{36})/i)![1]}`}
+                    >
+                      Öppna källanalys
+                    </a>
+                  )}
                 </div>
               </li>
             ))}

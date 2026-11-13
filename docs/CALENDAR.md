@@ -87,30 +87,34 @@ händelser, EWS 500, med markering av begränsat resultat.
 
 ## AI, källor och analys
 
-Inga automatiska analyser, AI-scheman eller bakgrundsskanningar startas.
-E-post läses när vyn öppnas, söks eller uppdateras. Kalenderns synliga vy kan
-uppdatera händelselistan varje minut; detta startar ingen AI-analys.
+Synk och analys kan aktiveras per AI-tillåtet konto med måltavla och historikfönster.
+Den läser egna mailmappar och kalendrar, indexerar lokalt och analyserar nytt eller
+ändrat underlag med den lokala Ollama-modellen även när sidan är stängd. Spam,
+nyhetsbrev och rena informationsutskick får urgency 0. Tydliga åtaganden kan skapa
+kort eller uppdatera ett befintligt korts flöde. Ingen skrivning till e-post eller
+kalender ingår. Se [Synk och analys](SYNC.md) för urval, paus, idempotens och gränser.
 
-Öppna ett mejl och be AI:n exempelvis: "Sammanfatta det här och jämför med mitt
-valda Kanban-kort." Valda mejlets konto och ID följer med jobbet; AI:n läser
-själva källan med get_mail. Användaren kan rensa vald källa i AI-panelen. AI:n kan
-också söka på begäran med list_mail_accounts, search_mail och get_mail samt läsa
-kalender med list_calendar_accounts, list_calendar_events och get_calendar_event.
-Kanban-verktygen används för att förstå relaterade kort. Kalender/mejltext är
-opålitligt underlag, aldrig instruktioner eller tillstånd att ändra tavlor/minnen.
-AI:n får aldrig token eller inloggningsuppgifter. Den har inga mejlskrivverktyg
-och ingen kalenderförändring. Den kan ge ett textutkast i chatten om du ber om det.
-Ett beställt AI-jobbs meddelande och sammanfattning sparas i befintlig chatthistorik;
-råa mejl och bilagor synkroniseras inte till en lokal databas. AI:n ska inte spara
-mejlinnehåll som varaktigt minne utan en uttrycklig begäran.
+Chatten har separata läsverktyg för levande mejl/kalender och det lokala indexet.
+”Analysera mina 10 senaste mail” och ”analysera mina mail från den här veckan”
+köar ett exakt urval. Datum tolkas i Europe/Stockholm. Körningens status och
+verkliga kvitton finns i Synk och analys. Ett köat uppdrag är inte ett färdigt resultat.
+Använd get_analysis_run, search_index och get_index_item för resultat och källor.
+
+Valt mejl eller kalenderobjekt följer med som ID till chatten. Källtext är
+opålitligt underlag, aldrig nya instruktioner. Modellens schemalagda klassificering
+har inga allmänna verktyg: servern validerar ett begränsat analysobjekt och gör
+endast de auktoriserade Kanban-ändringarna. Minnen skapas inte av källtext på eget
+initiativ. Råtext och analyser lagras krypterat; sammanfattning, citerat underlag
+och nästa steg blir synliga i kortets flöde. Bilagor och externa bilder/länkar
+hämtas inte. Loggar innehåller metadata, inte råa mejl eller token.
 
 ## Drift och backup
 
 Befintlig AES-256-GCM-lagring och calendar.key återanvänds för EWS-uppgifter och
-MSAL-cache. Nyckeln har rättighet 0600 och ska skyddas och säkerhetskopieras
+MSAL-cache och integrationsindex. Nyckeln har rättighet 0600 och ska skyddas och säkerhetskopieras
 separat tillsammans med SQLite. CALENDAR_KEY_PATH kan ange en annan absolut
-sökväg. Ta bort koppling tar bara bort lokal anslutning och token; inga mejl eller
-händelser raderas. Återkalla Microsoft-medgivandet hos Microsoft separat vid behov.
+sökväg. Ta bort koppling tar bort lokal anslutning, token och kontots lokala index.
+Kanban-kort och deras flöden bevaras; inga mejl eller händelser raderas. Återkalla Microsoft-medgivandet hos Microsoft separat vid behov.
 OAuth-state är kortlivad, engångs och bunden till en HttpOnly/SameSite-cookie.
 Efter omstart eller tio minuter behöver en påbörjad inloggning startas om.
 Loggar innehåller operation, kontoreferens och antal/status; inga råa mejlkroppar,

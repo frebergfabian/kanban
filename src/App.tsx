@@ -29,9 +29,15 @@ const Calendar = lazy(() =>
 const Mail = lazy(() =>
   import("./Mail.js").then((module) => ({ default: module.Mail })),
 );
+const Sync = lazy(() =>
+  import("./Sync.js").then((module) => ({ default: module.Sync })),
+);
 const NEW_BOARD = "__new_board";
 
 export default function App() {
+  const [syncOpen, setSyncOpen] = useState(() =>
+    window.location.hash.startsWith("#sync"),
+  );
   const [externalContext, setExternalContext] = useState<ExternalContext>();
   const [mailOpen, setMailOpen] = useState(() =>
     window.location.hash.startsWith("#mail"),
@@ -91,6 +97,16 @@ export default function App() {
   );
   const ownedJobs = useRef(new Set<string>()),
     handledQuestions = useRef(new Set<string>());
+  useEffect(() => {
+    const changed = () => {
+      setSyncOpen(window.location.hash.startsWith("#sync"));
+      setMailOpen(window.location.hash.startsWith("#mail"));
+      setCalendarOpen(window.location.hash.startsWith("#calendar"));
+      setEditor(undefined);
+    };
+    window.addEventListener("hashchange", changed);
+    return () => window.removeEventListener("hashchange", changed);
+  }, []);
   const autoJob = useRef<string | undefined>(undefined),
     pollRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -333,10 +349,19 @@ export default function App() {
           <select
             id="app-view"
             className="view-select"
-            value={mailOpen ? "mail" : calendarOpen ? "calendar" : "boards"}
+            value={
+              syncOpen
+                ? "sync"
+                : mailOpen
+                  ? "mail"
+                  : calendarOpen
+                    ? "calendar"
+                    : "boards"
+            }
             onChange={(e) => {
               setCalendarOpen(e.target.value === "calendar");
               setMailOpen(e.target.value === "mail");
+              setSyncOpen(e.target.value === "sync");
               window.history.replaceState(
                 null,
                 "",
@@ -347,8 +372,9 @@ export default function App() {
             <option value="boards">Tavlor</option>
             <option value="calendar">Kalender</option>
             <option value="mail">E-post</option>
+            <option value="sync">Synk och analys</option>
           </select>
-          {workspace && !calendarOpen && !mailOpen && (
+          {workspace && !calendarOpen && !mailOpen && !syncOpen && (
             <>
               <label className="sr-only" htmlFor="board-picker">
                 Tavla
@@ -405,6 +431,21 @@ export default function App() {
           onRefresh={() => pollRef.current()}
         />
         <div className="header-end">
+          {work.sync && (
+            <a
+              className={`sync-indicator ${work.sync.analyzing ? "working" : ""}`}
+              href="#sync"
+              aria-label="Öppna synk och analys"
+              title={
+                work.sync.enabled
+                  ? `${work.sync.queued} i analyskön, ${work.sync.failed} misslyckade`
+                  : "Automatisk synk pausad"
+              }
+            >
+              Synk{work.sync.analyzing ? " •" : ""}
+              {work.sync.queued ? ` · ${work.sync.queued}` : ""}
+            </a>
+          )}
           <button
             className={`button ai-toggle ${aiOpen ? "active" : ""}`}
             aria-expanded={aiOpen}
@@ -423,7 +464,7 @@ export default function App() {
             <span className="ai-label">AI-assistent</span>
             <span className="sr-only">, {statusText}</span>
           </button>
-          {!calendarOpen && !mailOpen && (
+          {!calendarOpen && !mailOpen && !syncOpen && (
             <button
               className="button primary"
               aria-label="Ny uppgift"
@@ -440,7 +481,37 @@ export default function App() {
       </header>
       <div className="workspace">
         <main className="board-area" inert={aiOpen && mobile}>
-          {mailOpen ? (
+          {syncOpen ? (
+            <Suspense
+              fallback={
+                <p role="status" className="board-loading">
+                  Öppnar synk och analys…
+                </p>
+              }
+            >
+              <Sync
+                onAsk={(context) => {
+                  setExternalContext(context);
+                  setAiOpen(true);
+                }}
+                onOpenTask={(id) => {
+                  void api<{ task: Task }>(`/api/tasks/${id}`)
+                    .then(async ({ task }) => {
+                      active.current = task.board_id;
+                      await load(task.board_id);
+                      setSprintView("all");
+                      setSyncOpen(false);
+                      setMailOpen(false);
+                      setCalendarOpen(false);
+                      window.history.replaceState(null, "", "/");
+                      setEditor({ task, columnId: task.column_id });
+                      setSelectedTaskId(task.id);
+                    })
+                    .catch((e) => setError(e.message));
+                }}
+              />
+            </Suspense>
+          ) : mailOpen ? (
             <Suspense
               fallback={
                 <p role="status" className="board-loading">

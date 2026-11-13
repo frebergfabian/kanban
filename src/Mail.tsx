@@ -28,6 +28,17 @@ export function Mail({
     [busy, setBusy] = useState(false),
     [opening, setOpening] = useState(false),
     [error, setError] = useState("");
+  const [scores, setScores] = useState<
+    Record<
+      string,
+      {
+        id: string;
+        urgency: number | null;
+        category: string | null;
+        status: string;
+      }
+    >
+  >({});
   const request = useRef(0),
     detailRequest = useRef(0),
     mounted = useRef(true);
@@ -85,6 +96,32 @@ export function Mail({
               }
             : result,
         );
+      void api<{
+        items: {
+          external_id: string;
+          index: {
+            id: string;
+            urgency: number | null;
+            category: string | null;
+            status: string;
+          } | null;
+        }[];
+      }>("/api/sync/lookup", "POST", {
+        account_id: account,
+        ids: result.messages.map((m) => m.id),
+      })
+        .then((lookup) => {
+          if (generation === request.current)
+            setScores((old) => ({
+              ...old,
+              ...Object.fromEntries(
+                lookup.items
+                  .filter((x) => x.index)
+                  .map((x) => [x.external_id, x.index!]),
+              ),
+            }));
+        })
+        .catch(() => {});
     } catch (e) {
       if (generation === request.current) setError((e as Error).message);
     } finally {
@@ -121,7 +158,9 @@ export function Mail({
       <div className="calendar-heading">
         <div>
           <h1>E-post</h1>
-          <p>Endast läsning · AI analyserar på din begäran</p>
+          <p>
+            Endast läsning · <a href="#sync">Synk och analys</a>
+          </p>
         </div>
         <button className="button" onClick={() => setSettings(true)}>
           Konton
@@ -234,6 +273,31 @@ export function Mail({
                   <time>{when(item.received_at)}</time>
                 </span>
                 <strong>{item.subject}</strong>
+                {scores[item.id] && (
+                  <span className="sync-item-meta">
+                    <span
+                      className={`urgency-score ${Number(scores[item.id].urgency) >= 75 ? "urgent" : ""}`}
+                    >
+                      {scores[item.id].urgency == null
+                        ? "Ej analyserad"
+                        : `${scores[item.id].urgency}%`}
+                    </span>
+                    <span>
+                      {
+                        (
+                          {
+                            action: "Åtgärd",
+                            question: "Fråga",
+                            meeting: "Möte",
+                            information: "Information",
+                            newsletter: "Utskick",
+                            spam: "Skräppost",
+                          } as Record<string, string>
+                        )[scores[item.id].category || ""]
+                      }
+                    </span>
+                  </span>
+                )}
                 {item.preview && (
                   <span className="mail-preview">{item.preview}</span>
                 )}
@@ -261,6 +325,14 @@ export function Mail({
           </div>
           {detail ? (
             <article className="mail-detail" aria-label="Mejlinnehåll">
+              {scores[detail.id] && (
+                <a
+                  className="text-button"
+                  href={`#sync?source=${scores[detail.id].id}`}
+                >
+                  Visa analys och kopplat Kanban-kort
+                </a>
+              )}
               <button
                 className="text-button"
                 onClick={() => {
