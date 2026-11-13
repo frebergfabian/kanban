@@ -879,6 +879,7 @@ export class Assistant {
             !failures.size &&
             !promptedAction &&
             this.store.board(workingBoard).kind === "scrum" &&
+            !/kalender|exchange|outlook|calendar/i.test(message) &&
             !safeQuestion &&
             /^(avsluta|starta|planera|skapa|lägg|flytta|tilldela)\b/i.test(
               message.trim(),

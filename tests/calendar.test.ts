@@ -110,6 +110,43 @@ test("calendar validation: bounds, real dates, offset-aware times and exclusive 
   );
 });
 
+test("calendar write requests never trigger Scrum's automatic write reminder", async () => {
+  const store = new Store(":memory:");
+  let rounds = 0;
+  const assistant = new Assistant(
+    store,
+    { url: "http://model.test", model: "test", timeout: 1000 },
+    (async (url) => {
+      if (String(url).endsWith("/api/show"))
+        return Response.json({ capabilities: ["tools"] });
+      rounds++;
+      return Response.json({
+        message: {
+          role: "assistant",
+          content:
+            "Jag kan bara läsa din kalender. Gör ändringen under Kalender.",
+        },
+      });
+    }) as typeof fetch,
+  );
+  try {
+    const board = store.createBoard({ name: "Scrum", kind: "scrum" });
+    const events: any[] = [];
+    await assistant.chat(
+      "Skapa en kalenderbokning i Exchange imorgon.",
+      newSession(),
+      (e) => events.push(e),
+      undefined,
+      { board_id: board.id },
+    );
+    assert.equal(rounds, 1);
+    assert.match(events.find((e) => e.type === "done").message, /bara läsa/);
+    assert.equal(store.list(board.id).length, 0);
+  } finally {
+    store.close();
+  }
+});
+
 test("real curl transport verifies TLS, sends escaped credentials via stdin and transmits the complete SOAP body", async () => {
   const dir = mkdtempSync(join(tmpdir(), "kanban-ews-tls-")),
     previous = process.env.CURL_CA_BUNDLE;
