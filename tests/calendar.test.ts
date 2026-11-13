@@ -13,11 +13,6 @@ import { execFileSync } from "node:child_process";
 import { createServer as httpsServer } from "node:https";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import type {
-  Configuration,
-  DeviceCodeRequest,
-  PublicClientApplication,
-} from "@azure/msal-node";
 import { Store } from "../server/store.js";
 import { Assistant, newSession, tools } from "../server/ai.js";
 import { createApp } from "../server/app.js";
@@ -218,7 +213,7 @@ test("real curl transport verifies TLS, sends escaped credentials via stdin and 
   }
 });
 
-test("Graph: paginated live reads, Stockholm/UTC conversion, conditional manual writes, meeting protection and safe next links", async () => {
+test("Graph: paginated live reads, Stockholm/UTC conversion, no write transport and safe next links", async () => {
   const calls: { url: URL; init: RequestInit }[] = [];
   const event = {
     id: "graph/id",
@@ -264,41 +259,16 @@ test("Graph: paginated live reads, Stockholm/UTC conversion, conditional manual 
   assert.equal(result.truncated, false);
   assert.equal(result.events[0].start, "2026-11-13T08:00:00.000Z");
   assert.equal(result.events[1].read_only, true);
-  await provider.create(input);
-  const body = JSON.parse(
-    calls.find((c) => c.init.method === "POST")!.init.body as string,
-  );
-  assert.equal(body.start.dateTime, "2026-11-13T08:00:00");
-  assert.equal(body.start.timeZone, "UTC");
-  await provider.create({
-    ...input,
-    all_day: true,
-    start: "2026-03-29",
-    end: "2026-03-30",
-  });
-  const allDay = JSON.parse(
-    calls.filter((c) => c.init.method === "POST").at(-1)!.init.body as string,
-  );
-  assert.equal(allDay.start.timeZone, "W. Europe Standard Time");
-  assert.equal(allDay.end.dateTime, "2026-03-30T00:00:00");
-  await assert.rejects(provider.update(event.id, "stale", input), /ändrats/);
-  await provider.update(event.id, event["@odata.etag"], input);
-  assert.equal(
-    (calls.find((c) => c.init.method === "PATCH")!.init.headers as any)[
-      "If-Match"
-    ],
-    event["@odata.etag"],
-  );
-  await provider.delete(event.id, event["@odata.etag"]);
-  event.attendees = [{ emailAddress: { address: "other@example.com" } }];
+  await assert.rejects(provider.create(input), /skrivskyddad/);
   await assert.rejects(
     provider.update(event.id, event["@odata.etag"], input),
-    /Outlook/,
+    /skrivskyddad/,
   );
   await assert.rejects(
     provider.delete(event.id, event["@odata.etag"]),
-    /Outlook/,
+    /skrivskyddad/,
   );
+  assert.ok(calls.every((c) => c.init.method === "GET"));
   const evil = new GraphCalendar("online", async () => "token", (async () =>
     Response.json({
       value: [],
@@ -404,98 +374,6 @@ test("accounts: encryption at rest, restart, missing key recovery, per-account p
     calendar.close();
     store.close();
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("MSAL lifecycle: device code only visible in manual settings, encrypted cache persists and removed login cannot restore account", async () => {
-  const store = new Store(":memory:"),
-    key = randomBytes(32);
-  let complete: (() => void) | undefined,
-    loaded = "";
-  const factory = (config: Configuration) => {
-    const cache = {
-      serialize: () => "secret-msal-refresh-cache",
-      deserialize: (value: string) => {
-        loaded = value;
-      },
-    };
-    return {
-      acquireTokenByDeviceCode: async (request: DeviceCodeRequest) => {
-        request.deviceCodeCallback({
-          userCode: "ABC-SECRET",
-          deviceCode: "never-browser-device-token",
-          verificationUri: "https://microsoft.com/devicelogin",
-          expiresIn: 900,
-          interval: 5,
-          message: "",
-        });
-        await new Promise<void>((resolve) => {
-          complete = resolve;
-        });
-        await config.cache!.cachePlugin!.afterCacheAccess({
-          tokenCache: cache,
-          cacheHasChanged: true,
-        } as any);
-        return { account: { homeAccountId: "test" } };
-      },
-      getTokenCache: () => ({
-        getAllAccounts: async () => {
-          await config.cache!.cachePlugin!.beforeCacheAccess({
-            tokenCache: cache,
-          } as any);
-          return [
-            { homeAccountId: "wrong-old-account" },
-            { homeAccountId: "test" },
-          ];
-        },
-      }),
-      acquireTokenSilent: async (request: any) => {
-        assert.equal(request.account.homeAccountId, "test");
-        return { accessToken: "access-secret" };
-      },
-    } as unknown as PublicClientApplication;
-  };
-  const calendar = new CalendarService(store, {
-    key,
-    clientFactory: factory,
-    request: (async () => Response.json({ value: [] })) as typeof fetch,
-  });
-  try {
-    const a = await calendar.add({
-      kind: "online",
-      name: "Privat",
-      client_id: "11111111-1111-4111-8111-111111111111",
-      tenant: "common",
-      allow_ai: true,
-    });
-    calendar.login(a.id);
-    assert.equal(calendar.accounts()[0].login?.code, "ABC-SECRET");
-    assert.ok(!JSON.stringify(calendar.accounts(true)).includes("ABC-SECRET"));
-    complete!();
-    await new Promise((r) => setTimeout(r, 0));
-    assert.equal(calendar.accounts()[0].connected, true);
-    assert.ok(
-      !JSON.stringify(
-        store.db.prepare("SELECT * FROM calendar_accounts").all(),
-      ).includes("secret-msal"),
-    );
-    calendar.close();
-    const restarted = new CalendarService(store, {
-      key,
-      clientFactory: factory,
-      request: (async () => Response.json({ value: [] })) as typeof fetch,
-    });
-    await restarted.list(range);
-    assert.equal(loaded, "secret-msal-refresh-cache");
-    restarted.login(a.id);
-    restarted.remove(a.id);
-    complete!();
-    await new Promise((r) => setTimeout(r, 0));
-    assert.equal(restarted.accounts().length, 0);
-    restarted.close();
-  } finally {
-    calendar.close();
-    store.close();
   }
 });
 

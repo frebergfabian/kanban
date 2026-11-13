@@ -55,10 +55,6 @@ export const accountInput = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("online"),
       name: z.string().trim().min(1).max(80),
-      client_id: z.uuid(),
-      tenant: z
-        .union([z.uuid(), z.enum(["common", "organizations", "consumers"])])
-        .default("common"),
       allow_ai: z.boolean().default(true),
     })
     .strict(),
@@ -103,7 +99,6 @@ export type CalendarAccount = {
   kind: "online" | "onprem";
   allow_ai: boolean;
   connected: boolean;
-  login?: { code: string; url: string; expires_at: string };
   error?: string;
 };
 export type CalendarResult = {

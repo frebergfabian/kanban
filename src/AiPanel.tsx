@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   Memory,
   AuditLog,
+  ExternalContext,
 } from "../shared/schema.js";
 import { api, requestId } from "./api.js";
 import { Icon } from "./Icon.js";
@@ -26,6 +27,8 @@ export function AiPanel({
   onConversation,
   onSubmitted,
   onRefresh,
+  externalContext,
+  onClearExternal,
 }: {
   open: boolean;
   onClose: () => void;
@@ -41,6 +44,8 @@ export function AiPanel({
   onConversation: (id?: string) => void;
   onSubmitted: (job: AiJob) => void;
   onRefresh: () => void;
+  externalContext?: ExternalContext;
+  onClearExternal?: () => void;
 }) {
   const [tab, setTab] = useState<"chat" | "history" | "memory" | "logs">(
       "chat",
@@ -180,6 +185,7 @@ export function AiPanel({
         board_id: workspace.board.id,
         ...(selectedTask ? { task_id: selectedTask.id } : {}),
         ...(sprintId ? { sprint_id: sprintId } : {}),
+        ...(externalContext ? { external_context: externalContext } : {}),
       });
       setInput("");
       setTab("chat");
@@ -268,10 +274,31 @@ export function AiPanel({
             Master: {workspace.board.parent_task_title}
           </p>
         )}
+        {externalContext && (
+          <div className="selected-task">
+            <span>
+              {externalContext.kind === "mail"
+                ? "Valt mejl"
+                : "Vald kalenderhändelse"}{" "}
+              · Endast läsning
+            </span>
+            <button
+              className="icon-button"
+              aria-label="Ta bort vald källa från AI-kontext"
+              onClick={onClearExternal}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        )}
         {selectedTask && (
           <div className="selected-task">
             <span>Kort: {selectedTask.title}</span>
-            <button className="icon-button" aria-label="Rensa valt AI-kort" onClick={onClearTask}>
+            <button
+              className="icon-button"
+              aria-label="Rensa valt AI-kort"
+              onClick={onClearTask}
+            >
               <Icon name="close" />
             </button>
           </div>

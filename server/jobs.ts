@@ -78,6 +78,16 @@ export class JobQueue {
     )
       throw new HttpError(429, "Kön är full. Vänta tills några jobb är klara.");
     const boardId = input.board_id ?? k.store.defaultBoardId();
+    if (
+      input.external_context &&
+      !this.assistant.calendar
+        ?.accounts(true)
+        .some((a) => a.id === input.external_context!.account_id && a.connected)
+    )
+      throw new HttpError(
+        403,
+        "Det valda kontot tillåter inte AI-läsning eller behöver anslutas igen.",
+      );
     k.store.board(boardId);
     if (input.task_id && k.store.get(input.task_id).board_id !== boardId)
       throw new HttpError(400, "Det valda kortet tillhör en annan tavla.");
@@ -111,6 +121,10 @@ export class JobQueue {
         created,
       );
       k.append(conversationId, id, "user", input.message);
+      if (input.external_context)
+        db.prepare(
+          "INSERT INTO ai_external_context(job_id,context) VALUES(?,?)",
+        ).run(id, JSON.stringify(input.external_context));
       db.prepare(
         "UPDATE ai_jobs SET status='completed',progress='Besvarad i ett nytt jobb' WHERE conversation_id=? AND status='needs_input'",
       ).run(conversationId);
@@ -214,6 +228,12 @@ export class JobQueue {
         abort.signal,
         {
           board_id: job.board_id,
+          external_context: (() => {
+            const row = k.store.db
+              .prepare("SELECT context FROM ai_external_context WHERE job_id=?")
+              .get(job.id) as { context: string } | undefined;
+            return row ? JSON.parse(row.context) : undefined;
+          })(),
           ...(job.task_id ? { task_id: job.task_id } : {}),
           ...(job.sprint_id ? { sprint_id: job.sprint_id } : {}),
         },

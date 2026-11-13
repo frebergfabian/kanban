@@ -42,9 +42,10 @@ export function calendarRoutes(calendar: CalendarService) {
     res.json({ ok: true });
   });
   router.post("/accounts/:id/login", (req, res) => {
-    z.object({}).strict().parse(req.body);
-    calendar.login(z.uuid().parse(req.params.id));
-    res.status(202).json({ ok: true });
+    throw new HttpError(
+      410,
+      "Använd Anslut Microsoft-konto för e-post och kalender.",
+    );
   });
   router.get("/events", async (req, res) =>
     res.json(
