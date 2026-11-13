@@ -10,6 +10,7 @@ import {
   useDroppable,
   pointerWithin,
   closestCorners,
+  rectIntersection,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
@@ -262,7 +263,23 @@ export function Board({
       activationConstraint: { delay: 220, tolerance: 8 },
     }),
     useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
+      coordinateGetter: (event, args) => {
+        const { collisionRect, droppableRects } = args.context;
+        if (collisionRect && ["ArrowLeft", "ArrowRight"].includes(event.code)) {
+          // Small edge differences between the overlay and its lane must not
+          // make the current column a horizontal keyboard destination.
+          const otherColumns = new Map(droppableRects);
+          for (const [id, rect] of otherColumns) {
+            if (Math.abs(rect.left - collisionRect.left) < 2)
+              otherColumns.delete(id);
+          }
+          return sortableKeyboardCoordinates(event, {
+            ...args,
+            context: { ...args.context, droppableRects: otherColumns },
+          });
+        }
+        return sortableKeyboardCoordinates(event, args);
+      },
     }),
   );
   function drop(event: DragEndEvent) {
@@ -292,7 +309,11 @@ export function Board({
       sensors={sensors}
       collisionDetection={(args) => {
         const hits = pointerWithin(args);
-        return hits.length ? hits : closestCorners(args);
+        if (hits.length) return hits;
+        // Keyboard dragging has no pointer. Prefer the lane actually intersected
+        // by the card, so a tall empty lane beats the card's original position.
+        const intersections = rectIntersection(args);
+        return intersections.length ? intersections : closestCorners(args);
       }}
       onDragStart={(event) =>
         setActive(tasks.find((t) => t.id === event.active.id))
