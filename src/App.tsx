@@ -34,6 +34,9 @@ const Sync = lazy(() =>
 );
 const NEW_BOARD = "__new_board";
 
+const DailyAgenda = lazy(() =>
+  import("./DailyAgenda.js").then((m) => ({ default: m.DailyAgenda })),
+);
 export default function App() {
   const [syncOpen, setSyncOpen] = useState(() =>
     window.location.hash.startsWith("#sync"),
@@ -319,6 +322,21 @@ export default function App() {
     }
   }
   const closeAi = useCallback(() => setAiOpen(false), []);
+  function openTaskById(id: string) {
+    void api<{ task: Task }>(`/api/tasks/${id}`)
+      .then(async ({ task }) => {
+        active.current = task.board_id;
+        await load(task.board_id);
+        setSprintView("all");
+        setSyncOpen(false);
+        setMailOpen(false);
+        setCalendarOpen(false);
+        window.history.replaceState(null, "", "/");
+        setEditor({ task, columnId: task.column_id });
+        setSelectedTaskId(task.id);
+      })
+      .catch((e) => setError(e.message));
+  }
   const selected = workspace?.tasks.find((t) => t.id === selectedTaskId);
   const statusText = status?.available
     ? `Ollama ansluten (${status.model})`
@@ -494,21 +512,7 @@ export default function App() {
                   setExternalContext(context);
                   setAiOpen(true);
                 }}
-                onOpenTask={(id) => {
-                  void api<{ task: Task }>(`/api/tasks/${id}`)
-                    .then(async ({ task }) => {
-                      active.current = task.board_id;
-                      await load(task.board_id);
-                      setSprintView("all");
-                      setSyncOpen(false);
-                      setMailOpen(false);
-                      setCalendarOpen(false);
-                      window.history.replaceState(null, "", "/");
-                      setEditor({ task, columnId: task.column_id });
-                      setSelectedTaskId(task.id);
-                    })
-                    .catch((e) => setError(e.message));
-                }}
+                onOpenTask={openTaskById}
               />
             </Suspense>
           ) : mailOpen ? (
@@ -611,6 +615,14 @@ export default function App() {
                     }
                   />
                 )
+              )}
+              {workspace && (
+                <Suspense fallback={null}>
+                  <DailyAgenda
+                    boardId={workspace.board.id}
+                    onOpenTask={openTaskById}
+                  />
+                </Suspense>
               )}
               {moving && (
                 <span className="sr-only" role="status">

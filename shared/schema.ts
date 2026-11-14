@@ -1,3 +1,4 @@
+import { ignoredSender, rejectCard, waitingCard } from "./workflow.js";
 import { z } from "zod";
 import { calendarId, calendarRange } from "./calendar.js";
 import { mailSearch } from "./mail.js";
@@ -118,6 +119,15 @@ const page = {
   limit: z.number().int().min(1).max(60).default(30),
 };
 export const toolSchemas = {
+  list_ignored_senders: z.object({}).strict(),
+  add_ignored_sender: ignoredSender,
+  remove_ignored_sender: z
+    .object({ id: z.string().regex(/^[a-f0-9]{64}$/) })
+    .strict(),
+  reject_ai_card: rejectCard,
+  get_card_feedback: z.object({}).strict(),
+  wait_for_task: waitingCard,
+  get_daily_agenda: z.object({ day: z.iso.date().optional() }).strict(),
   analyze_mail: analysisRequest.safeExtend({
     kind: z.literal("mail").default("mail"),
   }),

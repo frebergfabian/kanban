@@ -1,3 +1,4 @@
+import { WorkflowSettings } from "./WorkflowSettings.js";
 import { useEffect, useRef, useState } from "react";
 import { DateTime } from "luxon";
 import type { IntegrationSync } from "../server/integration-sync.js";
@@ -23,6 +24,8 @@ const labels: Record<string, string> = {
   indexed: "Indexerad",
   failed: "Misslyckad",
   removed: "Källan borttagen",
+  excluded: "Ignorerad avsändare",
+  rejected: "Avvisat förslag",
   indexing: "Hämtar urval",
   analyzing: "Analyserar",
   completed: "Klar",
@@ -223,6 +226,7 @@ export function Sync({
           ))}
         </div>
       )}
+      <WorkflowSettings />
       {draft && (
         <details className="sync-settings">
           <summary>Inställningar</summary>
@@ -251,8 +255,9 @@ export function Sync({
               Automatisk analys och uppdatering av Kanban
             </label>
             <label>
-              Nya kort på tavla
+              Nya AI-kort → huvudtavlans Inkorg
               <select
+                disabled
                 value={draft.board_id}
                 onChange={(e) =>
                   setDraft({ ...draft, board_id: e.target.value })
@@ -561,8 +566,14 @@ export function Sync({
                     ? `${source.analysis.urgency}%`
                     : "Ej analyserad"}
                 </span>
-                <span>{labels[source.analysis?.category || ""]}</span>
-                <span>{labels[source.status] || source.status}</span>
+                <span
+                  className={`category-pill ${source.analysis?.category || ""}`}
+                >
+                  {labels[source.analysis?.category || ""]}
+                </span>
+                <span className={`source-state ${source.status}`}>
+                  {labels[source.status] || source.status}
+                </span>
                 {source.task_id && <span>Kopplat kort</span>}
               </span>
               {source.analysis && (

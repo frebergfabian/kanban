@@ -1,7 +1,7 @@
 # Synk och analys
 
 Välj **Synk och analys** i Vy-menyn eller klicka på Synk i sidhuvudet. Här finns
-aktivering/paus, måltavla, valda konton, historikfönster, index, urgency, fel och
+aktivering/paus, valda konton, historikfönster, index, urgency, fel och
 manuella analyskörningar. Tjänsten arbetar även när webbläsaren är stängd.
 En ny installation är pausad tills den aktiveras. Varje konto måste dessutom
 vara anslutet och tillåta AI-läsning i Konton.
@@ -54,7 +54,7 @@ indexerade kontexten bevisar inte att en fråga fortfarande är obesvarad.
 
 Automatiskt kortskapande kräver konkret åtagande, minst 0,85 bedömningssäkerhet
 och ett ordagrant belägg ur källans rubrik eller brödtext. Modellen väljer ett numrerat källutdrag; servern hämtar citatet ur originalet, så att parafraser inte kan bli påhittade källbelägg. Ett nytt kort hamnar
-på måltavlan, normalt Inkorg, i dess första kolumn. Urgency överförs till
+på huvudtavlan i dess Inkorg-kolumn. Urgency överförs till
 Låg/Normal/Hög prioritet. Källreferens, sammanfattning, belägg och nästa steg
 läggs i kortets flöde. Kortets urgency-bricka är högsta aktuella bedömningen
 bland kopplade indexkällor.
@@ -137,3 +137,23 @@ GET-only och inga nya Exchange-skrivoperationer introduceras.
 Primärkällor: [Graph-delta](https://learn.microsoft.com/en-us/graph/api/message-delta),
 [oföränderliga ID:n](https://learn.microsoft.com/en-us/graph/outlook-immutable-id),
 [EWS-synk](https://learn.microsoft.com/en-us/exchange/client-developer/exchange-web-services/mailbox-synchronization-and-ews-in-exchange).
+
+## Huvudtavlans arbetsflöde och återkoppling
+
+Nya automatiskt skapade kort hamnar i **Inkorg** på den äldsta huvudtavlan. Befintliga genererade kort flyttas dit vid uppgraderingen; manuella kort på andra tavlor flyttas inte. Den separata Inkorg-tavlan och all historik bevaras. Förslag som bara gäller vanlig mötesnärvaro eller en ignorerad avsändare arkiveras i **Inkorg → Avvisat**, med en förklaring i flödet. Befintliga kort med uttryckliga förberedelser behålls.
+
+Öppna ett AI-skapat kort och välj **Avvisa AI-förslag**. Skriv varför det inte är ett åtagande och välj **Avvisa och spara feedback**. Kortet arkiveras, källtråden spärras från återskapande och motiveringen används som kontext för nya analyser från samma avsändare. Detta ändrar inte modellens vikter och skapar ingen generell avsändarspärr. Synkpanelen visar sparad feedback. Systemets egna regelmigreringar används inte som användarens lärande exempel.
+
+**Ignore-listan** finns under Synk och analys. Börjar med `noreply_servicedesk@finspang.se`. Exakta adresser jämförs utan skillnad på stora/små bokstäver; inga domänjokertecken. Befintlig analys och söktermer tas bort direkt, råtexten töms i indexet och framtida/manuella analyser passerar inte modellen. Transporten får fortfarande läsa ett mejl för att identifiera avsändaren; det skickas aldrig vidare till AI:n. Mejl i Exchange ändras inte. Borttagen regel återspelar inte historik automatiskt; begär en ny analys om det behövs. Exempel i vanlig chatt: ”Ignorera aviseringar@exempel.se”. AI-verktygen accepterar inte mejl-/kalenderdata som godkännande av regeländringar.
+
+Kalenderposter är fortfarande läsbara och synliga i agendan, men närvaro är ingen uppgift. Endast uttryckligt konkret förarbete i originalunderlaget får skapa ett förberedelsekort. Vanliga möten, helgdagar, födelsedagar och ledighet får inget kort. Både en deterministisk spärr före modellen och kontroll av det citerade förberedelseunderlaget används.
+
+**Backlog** på huvudtavlan får aktiva kort vars deadline har passerat (även när en aktiv underuppgift på kortets Scrum-tavla är försenad). Regeln kontrolleras varje minut. Försenade kort flyttas en gång och får en förklaring i flödet. **Väntar** och Klart undantas. Flytta manuellt eller använd kortets vänteläge med orsak och uppföljningsdatum. Ett väntedatum startar inget arbete och flyttar inte kortet automatiskt. Scrum-tavlans befintliga backlog ändras inte.
+
+## Morgonsammanfattning och agenda
+
+Huvudtavlans nederdel visar dagens agenda i helbredd och den sparade morgonsammanfattningen. En sammanfattning skapas en gång per datum **06:00 Europe/Stockholm**, med hänsyn till sommar-/vintertid. Har servern varit avstängd skapas dagens sammanfattning när den startar efter 06; missade historiska dagar fabriceras inte. Servern måste köras för att schemat ska exekveras. En transaktion och datumets primärnyckel skyddar mot dubbla sammanfattningar.
+
+Sammanfattningen är faktabaserad: dagens synkade agenda, gårdagens registrerade flyttar till Klart och antal kort med inlägg, förfallna/förfallande kort, urgency ≥75 och väntande arbete med uppföljningsdatum. Den kräver ingen extra modellkörning. Dagens agenda uppdateras löpande; morgonens ögonblicksbild bevaras krypterad. Återkallade kontons kalenderdata filtreras även ur äldre sammanfattningar. Historiska Klart-flyttar läses ur befintliga aktivitetsinlägg där målkolumnen fortfarande går att identifiera; nya flyttar registreras strukturerat. Avvisning räknas inte som färdigt arbete.
+
+Nya läs-/arbetsflödesverktyg: `get_daily_agenda`, `list_ignored_senders`, `add_ignored_sender`, `remove_ignored_sender`, `get_card_feedback`, `reject_ai_card`, `wait_for_task`. Samtliga mail-/kalenderanslutningar förblir skrivskyddade för AI:n. Krypterad lagring använder den befintliga kalendernyckeln även för regler, feedback och sammanfattningar. Loggar innehåller händelsekod, datum och interna ID, inte mejltext, avsändaradresser, motiveringar eller autentiseringsuppgifter.

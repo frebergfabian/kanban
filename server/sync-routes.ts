@@ -45,5 +45,42 @@ export function syncRoutes(sync: IntegrationSync) {
       .parse(req.body);
     res.json({ items: sync.lookup(input.account_id, input.ids) });
   });
+  router.get("/workflow", (_req, res) =>
+    res.json({
+      ignored: sync.workflow.ignores(),
+      feedback: sync.workflow.feedbackList(),
+    }),
+  );
+  router.post("/ignore", (req, res) =>
+    res.json({ ignored: sync.workflow.addIgnore(req.body) }),
+  );
+  router.delete("/ignore/:id", (req, res) =>
+    res.json({ ignored: sync.workflow.removeIgnore(String(req.params.id)) }),
+  );
+  router.get("/tasks/:id/proposal", (req, res) =>
+    res.json(sync.workflow.taskInfo(z.uuid().parse(req.params.id))),
+  );
+  router.post("/tasks/:id/reject", (req, res) =>
+    res.json(
+      sync.workflow.reject({ ...req.body, id: z.uuid().parse(req.params.id) }),
+    ),
+  );
+  router.post("/tasks/:id/wait", (req, res) =>
+    res.json({
+      task: sync.workflow.wait({
+        ...req.body,
+        id: z.uuid().parse(req.params.id),
+      }),
+    }),
+  );
+  router.get("/daily", (req, res) =>
+    res.json(
+      sync.workflow.daily(
+        req.query.day === undefined
+          ? undefined
+          : z.iso.date().parse(req.query.day),
+      ),
+    ),
+  );
   return router;
 }

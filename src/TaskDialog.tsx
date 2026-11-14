@@ -60,6 +60,54 @@ export function TaskDialog({
     [posting, setPosting] = useState(false),
     [feedError, setFeedError] = useState(""),
     [feedLoading, setFeedLoading] = useState(!!task);
+  const [canReject, setCanReject] = useState(false),
+    [rejecting, setRejecting] = useState(false),
+    [rejectReason, setRejectReason] = useState(
+      "Det här innebär ingen uppgift för mig.",
+    ),
+    [waitReason, setWaitReason] = useState(""),
+    [waitUntil, setWaitUntil] = useState("");
+  useEffect(() => {
+    if (!task) return;
+    let live = true;
+    void api<{
+      can_reject: boolean;
+      waiting: { reason: string; until_date: string | null } | null;
+    }>(`/api/sync/tasks/${task.id}/proposal`)
+      .then((d) => {
+        if (live) {
+          setCanReject(d.can_reject);
+          if (d.waiting) {
+            setWaitReason(d.waiting.reason);
+            setWaitUntil(d.waiting.until_date ?? "");
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [task?.id]);
+  async function proposalAction(kind: "reject" | "wait") {
+    if (!task) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(
+        `/api/sync/tasks/${task.id}/${kind}`,
+        "POST",
+        kind === "reject"
+          ? { reason: rejectReason }
+          : { reason: waitReason, until: waitUntil || null },
+      );
+      onSaved(await api<Workspace>(`/api/boards/${workspace.board.id}`));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   useEffect(() => {
     dialog.current?.showModal();
     titleField.current?.focus();
@@ -240,6 +288,78 @@ export function TaskDialog({
           <Icon name="close" />
         </button>
       </header>
+      {task && (
+        <div className="proposal-actions">
+          {canReject && (
+            <>
+              <button
+                type="button"
+                className="button reject-button"
+                disabled={busy}
+                onClick={() => setRejecting(!rejecting)}
+              >
+                Avvisa AI-förslag
+              </button>
+              {rejecting && (
+                <div className="reject-panel">
+                  <label htmlFor="reject-reason">
+                    Varför är detta ingen uppgift?
+                  </label>
+                  <textarea
+                    id="reject-reason"
+                    maxLength={1000}
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                  />
+
+                  <p>
+                    Kortet arkiveras. Din feedback hjälper kommande analyser,
+                    och samma tråd skapar inte kortet igen.
+                  </p>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={busy || !rejectReason.trim()}
+                    onClick={() => void proposalAction("reject")}
+                  >
+                    Avvisa och spara feedback
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          <details>
+            <summary className="waiting-color">
+              Väntar på svar, leverans eller datum
+            </summary>
+            <label>
+              Orsak
+              <input
+                maxLength={1000}
+                value={waitReason}
+                onChange={(e) => setWaitReason(e.target.value)}
+                placeholder="Till exempel leverans från leverantören"
+              />
+            </label>
+            <label>
+              Följ upp{" "}
+              <input
+                type="date"
+                value={waitUntil}
+                onChange={(e) => setWaitUntil(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="button"
+              disabled={busy || !waitReason.trim()}
+              onClick={() => void proposalAction("wait")}
+            >
+              Flytta till Väntar
+            </button>
+          </details>
+        </div>
+      )}
       <form onSubmit={save}>
         <fieldset disabled={busy} className="space-y-5">
           <label className="field">
