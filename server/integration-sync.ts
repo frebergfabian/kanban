@@ -13,6 +13,8 @@ import {
 } from "../shared/sync.js";
 import type { Assistant } from "./ai.js";
 import { HttpError } from "./store.js";
+import { Workflow } from "./workflow.js";
+import { calendarNeedsPreparation } from "../shared/workflow.js";
 import { scrub } from "./knowledge.js";
 
 type Source = {
@@ -70,11 +72,20 @@ const words = (s: string) => [
   ),
 ];
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
-const doneStates = new Set(["done", "review", "excluded", "removed", "failed"]);
+const doneStates = new Set([
+  "rejected",
+  "done",
+  "review",
+  "excluded",
+  "removed",
+  "failed",
+]);
 
 /** Durable producer/consumer. The classifier receives data and a JSON schema,
  * never the general assistant's write tools. All Kanban writes are bounded here. */
 export class IntegrationSync {
+  readonly workflow: Workflow;
+  private workflowTimer?: ReturnType<typeof setInterval>;
   private closed = false;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private producing = false;
@@ -120,6 +131,7 @@ export class IntegrationSync {
     this.db
       .prepare("UPDATE sync_sources SET status='queued' WHERE status='running'")
       .run();
+    this.workflow = new Workflow(this, clock);
   }
   private get db() {
     return this.assistant.store.db;
@@ -156,6 +168,7 @@ export class IntegrationSync {
     const changed = input.initial_days !== previous.initial_days;
     const settings = {
       ...input,
+      board_id: this.assistant.store.defaultBoardId(),
       since:
         changed || !previous.account_ids.length
           ? this.time(this.clock() - input.initial_days * 86400000)
@@ -223,6 +236,17 @@ export class IntegrationSync {
     return ready && inWindow && this.auto(source.account_id);
   }
   start() {
+    this.workflow.initialize();
+    this.workflow.tick(true);
+    this.workflowTimer = setInterval(() => {
+      if (this.closed) return;
+      try {
+        this.workflow.tick();
+      } catch {
+        this.audit("worker_error", { worker: "workflow" });
+      }
+    }, 1000);
+    this.workflowTimer.unref();
     const loop = (work: () => Promise<boolean>, delay: number) => {
       const next = async () => {
         if (this.closed) return;
@@ -249,6 +273,7 @@ export class IntegrationSync {
   }
   async close() {
     this.closed = true;
+    clearInterval(this.workflowTimer);
     this.abort?.abort();
     this.timers.forEach(clearTimeout);
   }
@@ -612,7 +637,12 @@ export class IntegrationSync {
       )
       .get(accountId, document.kind, identity) as Source | undefined;
     const id = old?.id || randomUUID();
-    const payload = this.calendar.sealIndex(`source:${id}`, document);
+    const payload = this.calendar.sealIndex(
+      `source:${id}`,
+      this.workflow.isIgnored(document)
+        ? { ...document, body: "", body_truncated: true }
+        : document,
+    );
     this.db.transaction(() => {
       if (old && old.content_hash === fingerprint) {
         this.db
@@ -665,6 +695,7 @@ export class IntegrationSync {
           )
           .run(accountId, thread, id);
     })();
+    if (this.workflow.isIgnored(document)) this.workflow.exclude(id, document);
     return id;
   }
   private source(id: string): Source {
@@ -676,6 +707,11 @@ export class IntegrationSync {
     return row;
   }
   item(id: string, ai = false) {
+    if (ai && this.source(id).status === "excluded")
+      throw new HttpError(
+        403,
+        "Avsändaren är ignorerad. Källan lämnas inte till AI:n.",
+      );
     const row = this.source(id),
       document = this.calendar.openIndex<SyncDocument>(
         `source:${id}`,
@@ -711,7 +747,7 @@ export class IntegrationSync {
       .slice(0, 12)
       .map((w) => this.calendar.indexHash(`term:${w}`));
     if (!allowed.size) return { items: [], total: 0, next_offset: null };
-    const condition = `FROM sync_sources s WHERE account_id IN(${[...allowed].map(() => "?").join(",")}) AND (?='all' OR kind=?) AND (? IS NULL OR account_id=?) AND (? IS NULL OR category=?) AND COALESCE(urgency,0)>=? AND (? IS NULL OR occurred_at>=?) AND (? IS NULL OR occurred_at<?) ${terms.length ? `AND id IN(SELECT source_id FROM sync_terms WHERE term IN (${terms.map(() => "?").join(",")}) GROUP BY source_id HAVING count(*)=?)` : ""}`;
+    const condition = `FROM sync_sources s WHERE status!='excluded' AND account_id IN(${[...allowed].map(() => "?").join(",")}) AND (?='all' OR kind=?) AND (? IS NULL OR account_id=?) AND (? IS NULL OR category=?) AND COALESCE(urgency,0)>=? AND (? IS NULL OR occurred_at>=?) AND (? IS NULL OR occurred_at<?) ${terms.length ? `AND id IN(SELECT source_id FROM sync_terms WHERE term IN (${terms.map(() => "?").join(",")}) GROUP BY source_id HAVING count(*)=?)` : ""}`;
     const parameters = [
       ...allowed,
       input.kind,
@@ -1076,11 +1112,28 @@ export class IntegrationSync {
         `source:${row.id}`,
         row.payload,
       );
+      if (this.workflow.isIgnored(document)) {
+        this.workflow.exclude(row.id, document);
+        return true;
+      }
+      if (
+        this.workflow.isRejected(row.thread_hash, row.identity_hash) ||
+        (row.task_id && this.workflow.rejectedTask(row.task_id))
+      ) {
+        this.db
+          .prepare(
+            "UPDATE sync_sources SET status='rejected',urgency=0,manual_priority=0,last_error=NULL WHERE id=?",
+          )
+          .run(row.id);
+        return true;
+      }
       const candidates = this.candidates(document, row);
       let analysis: SourceAnalysis;
       if (
         ["junk", "drafts", "deleted"].includes(document.role) ||
-        document.cancelled
+        document.cancelled ||
+        (document.kind === "calendar" &&
+          !calendarNeedsPreparation(document, this.clock()))
       )
         analysis = {
           category: document.role === "junk" ? "spam" : "information",
@@ -1091,7 +1144,7 @@ export class IntegrationSync {
             ? "Kalenderhändelsen är avbokad."
             : document.role === "junk"
               ? "Servern har placerat mejlet i skräppost."
-              : "Skickat, utkast eller borttaget: inget nytt inkommande åtagande.",
+              : "Inget konkret förberedelsebehov eller nytt inkommande åtagande.",
           action_title: "",
           action_details: "",
           due_date: null,
@@ -1103,7 +1156,7 @@ export class IntegrationSync {
         const related = (
           this.db
             .prepare(
-              "SELECT id FROM sync_sources WHERE account_id=? AND thread_hash=? AND id!=? ORDER BY occurred_at DESC LIMIT 8",
+              "SELECT id FROM sync_sources WHERE account_id=? AND thread_hash=? AND id!=? AND status NOT IN('excluded','rejected') ORDER BY occurred_at DESC LIMIT 8",
             )
             .all(row.account_id, row.thread_hash, row.id) as { id: string }[]
         ).map((x) => {
@@ -1121,6 +1174,7 @@ export class IntegrationSync {
                 "SELECT 1 FROM sync_streams WHERE account_id=? AND kind='mail' AND (last_error IS NOT NULL OR baseline_complete=0) LIMIT 1",
               )
               .get(row.account_id),
+            this.workflow.feedback(document, row.account_id),
           ),
         );
       }
@@ -1190,7 +1244,11 @@ export class IntegrationSync {
     candidateIds: Set<string>,
   ) {
     const analysis = analysisSchema.parse(scrub(result));
-    if (document.role === "sent") {
+    if (
+      document.role === "sent" ||
+      (document.kind === "calendar" &&
+        !calendarNeedsPreparation(document, this.clock()))
+    ) {
       analysis.category = "information";
       analysis.action_required = false;
     }
@@ -1201,7 +1259,32 @@ export class IntegrationSync {
       analysis.urgency = 0;
       analysis.action_required = false;
     }
+    if (this.workflow.isIgnored(document)) {
+      this.workflow.exclude(row.id, document);
+      return;
+    }
+    if (
+      this.workflow.isRejected(row.thread_hash, row.identity_hash) ||
+      (row.task_id && this.workflow.rejectedTask(row.task_id))
+    ) {
+      this.db
+        .prepare(
+          "UPDATE sync_sources SET status='rejected',urgency=0,manual_priority=0,last_error=NULL WHERE id=?",
+        )
+        .run(row.id);
+      return;
+    }
     const evidence = analysis.evidence.trim();
+    if (
+      document.kind === "calendar" &&
+      !calendarNeedsPreparation(
+        { ...document, title: "", body: evidence },
+        this.clock(),
+      )
+    ) {
+      analysis.action_required = false;
+      analysis.urgency = 0;
+    }
     const actionable =
       analysis.action_required &&
       analysis.confidence >= 0.85 &&
@@ -1241,6 +1324,7 @@ export class IntegrationSync {
             ? analysis.match_task_id
             : null;
         if (
+          (candidateMatch && this.workflow.rejectedTask(candidateMatch)) ||
           links.some((l) => !l.task_id) ||
           linkedIds.size > 1 ||
           (analysis.match_task_id && !candidateMatch && !linkedIds.size)
@@ -1258,7 +1342,8 @@ export class IntegrationSync {
           if (!taskId) {
             const task = this.assistant.store.create(
               {
-                board_id: this.settings().board_id,
+                board_id: this.assistant.store.defaultBoardId(),
+                column_id: this.workflow.inbox().id,
                 title: analysis.action_title.trim(),
                 description: analysis.action_details || analysis.summary,
                 priority,
@@ -1335,7 +1420,7 @@ export class IntegrationSync {
           links.some((l) => !l.task_id) || linked.size > 1
             ? null
             : ([...linked][0] ?? taskId ?? match);
-        if (target) {
+        if (target && !this.workflow.rejectedTask(target)) {
           this.assistant.store.addPost(
             target,
             {

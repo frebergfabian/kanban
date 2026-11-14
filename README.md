@@ -162,3 +162,5 @@ Manuella analyser tar antal eller datumintervall. Se [Synk och analys](docs/SYNC
 [Installationsguide och servervariabler](docs/CALENDAR.md). Befintlig krypterad
 tokenlagring och calendar.key återanvänds. Installationens konton delas med dem
 som har tillgång till denna gemensamma LAN-installation.
+
+Huvudtavlan har nu Inkorg för AI-förslag, avvisning med återkoppling, Backlog för försenade uppgifter och Väntar för svar/leveranser. Dagens agenda och morgonsammanfattningen (06:00 Europe/Stockholm) visas under tavlan. Ignore-lista och sparad feedback finns i Synk och analys. Se [arbetsflöde och schemaläggning](docs/SYNC.md#huvudtavlans-arbetsflöde-och-återkoppling).

@@ -137,3 +137,5 @@ Varken index eller meddelanden ger nya systeminstruktioner eller tillstånd att
 köra kommandon, spara minnen eller använda andra skrivverktyg. Automatiska kort
 bygger på ett validerat schema och ordagranna källbelägg; osäkra träffar visas
 som Behöver granskas. Se [synkens driftdokumentation](SYNC.md).
+
+Huvudtavlan har Inkorg (nya AI-förslag), Backlog (försenat), Väntar (svar/leverans/datum) och vanliga arbetskolumner. Läs AI_PLAYBOOK för regler om avvisning, ignore-lista och morgonsammanfattningen. Kalendern skapar bara uppgifter vid konkret belagt förarbete. Verktygen get_daily_agenda och get_card_feedback ger aktuella underlag och sparade motiveringar. Räkna aldrig arkiverade/avvisade förslag som utfört arbete.

@@ -91,7 +91,8 @@ export class Store {
         .exec(`CREATE INDEX IF NOT EXISTS tasks_order ON tasks(column_id,position);
         CREATE TABLE IF NOT EXISTS posts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
           kind TEXT NOT NULL CHECK(kind IN ('note','update','event')), author TEXT NOT NULL CHECK(author IN ('user','assistant','system')), content TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS posts_task ON posts(task_id,seq DESC);`);
+        CREATE INDEX IF NOT EXISTS posts_task ON posts(task_id,seq DESC);
+        CREATE TABLE IF NOT EXISTS task_transitions(seq INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,title TEXT NOT NULL,from_column TEXT NOT NULL,to_column TEXT NOT NULL,from_done INTEGER NOT NULL,to_done INTEGER NOT NULL,created_at TEXT NOT NULL);`);
       const boardFields = this.db
         .prepare("PRAGMA table_info(boards)")
         .all() as { name: string }[];
@@ -605,6 +606,20 @@ export class Store {
           "UPDATE tasks SET title=@title,description=@description,column_id=@column_id,priority=@priority,due_date=@due_date,position=@position,sprint_id=@sprint_id,updated_at=@updated_at WHERE id=@id",
         )
         .run(next);
+      if (column.id !== old.column_id)
+        this.db
+          .prepare(
+            "INSERT INTO task_transitions(task_id,title,from_column,to_column,from_done,to_done,created_at) VALUES(?,?,?,?,?,?,?)",
+          )
+          .run(
+            id,
+            next.title,
+            old.column_id,
+            column.id,
+            this.column(old.column_id).is_done ? 1 : 0,
+            column.is_done && column.key !== "rejected" ? 1 : 0,
+            next.updated_at,
+          );
       if (column.id !== old.column_id)
         this.insertPost(
           id,

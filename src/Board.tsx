@@ -115,6 +115,7 @@ function Card({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`task-card ${isDragging ? "dragging" : ""}`}
       data-task-id={task.id}
+      data-priority={task.priority}
       {...pointer}
       onContextMenu={(e) => {
         // Long-press starts a drag on touch screens; keep the context menu out of the way.
@@ -191,7 +192,7 @@ function Column({
       <header className="column-header">
         <h2>
           <span
-            className={`column-dot ${column.is_done ? "done" : column.key === "in_progress" ? "in_progress" : ""}`}
+            className={`column-dot ${column.is_done ? "done" : column.key}`}
             aria-hidden="true"
           />
           <span className="column-name">{column.name}</span>

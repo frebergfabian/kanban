@@ -640,3 +640,444 @@ test("the recent-mail poll continues while delta backfill is unfinished and cale
     await f.close();
   }
 });
+
+test("workflow routes generated proposals to main Inbox and migrates only generated cards, preserving manual work", async () => {
+  const f = await fixture();
+  try {
+    await f.ready();
+    const source = f.sync.ingest(f.account, doc());
+    await f.sync.analyzeOne();
+    const generated = f.store.get(f.sync.item(source).task_id!);
+    assert.equal(f.store.column(generated.column_id).key, "inbox");
+    const legacy = f.store.createBoard({ name: "Inkorg", kind: "kanban" });
+    f.store.update(generated.id, { board_id: legacy.id });
+    const manual = f.store.create({
+      board_id: legacy.id,
+      title: "Manuellt arbete",
+    });
+    f.store.db
+      .prepare("UPDATE sync_config SET settings=? WHERE id=1")
+      .run(JSON.stringify({ ...f.sync.settings(), board_id: legacy.id }));
+    f.sync.workflow.initialize();
+    assert.equal(f.store.get(generated.id).board_id, f.store.defaultBoardId());
+    assert.equal(f.store.get(manual.id).board_id, legacy.id);
+    assert.equal(f.store.boards().filter((b) => b.name === "Inkorg").length, 1);
+    assert.deepEqual(f.sync.workflow.columns().waiting.key, "waiting");
+    const rev = f.store.workspace().revision;
+    f.sync.workflow.initialize();
+    assert.equal(f.store.workspace().revision, rev);
+  } finally {
+    await f.close();
+  }
+});
+
+test("rejection preserves history, blocks thread resurrection and gives contextual feedback without globally ignoring sender", async () => {
+  const f = await fixture();
+  try {
+    await f.ready();
+    const first = doc({ thread_id: "rejected-thread" }),
+      source = f.sync.ingest(f.account, first);
+    await f.sync.analyzeOne();
+    const id = f.sync.item(source).task_id!,
+      postCount = f.store.detail(id).posts.length;
+    f.sync.workflow.reject({
+      id,
+      reason: "Det är bara en statusrapport; jag behöver inte svara.",
+    });
+    assert.equal(f.store.column(f.store.get(id).column_id).key, "rejected");
+    assert.ok(f.store.detail(id).posts.length > postCount);
+    assert.equal(f.sync.workflow.canReject(id), false);
+    assert.equal(f.sync.workflow.isIgnored(first), false);
+    f.sync.ingest(f.account, {
+      ...first,
+      external_id: "new-id",
+      identity: "new-in-thread",
+      body: "Kan du skicka rapporten före fredag? Ny påminnelse.",
+    });
+    for (let i = 0; i < 5; i++) await f.sync.analyzeOne();
+    assert.equal(
+      (f.store.db.prepare("SELECT count(*) n FROM tasks").get() as any).n,
+      1,
+    );
+    let feedback: any[] = [];
+    f.classify(async (_source, context) => {
+      feedback = context.rejection_feedback;
+      return outcome({ action_required: false, category: "information" });
+    });
+    f.sync.ingest(f.account, doc({ thread_id: "different-thread" }));
+    await f.sync.analyzeOne();
+    assert.ok(feedback.some((x) => x.reason.includes("statusrapport")));
+    assert.equal(
+      (f.store.db.prepare("SELECT count(*) n FROM tasks").get() as any).n,
+      1,
+    );
+    assert.throws(
+      () =>
+        f.sync.workflow.reject({
+          id: f.store.create({ title: "Manuellt" }).id,
+          reason: "Fel",
+        }),
+      /Bara aktiva/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("ignore rules short-circuit automatic, manual, in-flight analysis and index reads without leaking bodies", async () => {
+  const f = await fixture();
+  try {
+    await f.ready();
+    const ignored = doc({
+        sender: "Service <NOREPLY_SERVICEDESK@FINSPANG.SE>",
+      }),
+      source = f.sync.ingest(f.account, ignored);
+    assert.equal(f.sync.item(source).status, "excluded");
+    assert.equal(f.sync.item(source).document.body, "");
+    assert.equal(await f.sync.analyzeOne(), false);
+    assert.equal(f.calls(), 0);
+    assert.throws(() => f.sync.item(source, true), /ignorerad/);
+    assert.equal(f.sync.search({}).total, 0);
+    // Even a manual run cannot bypass the rule.
+    f.store.db
+      .prepare(
+        "UPDATE sync_sources SET status='queued',manual_priority=100 WHERE id=?",
+      )
+      .run(source);
+    await f.sync.analyzeOne();
+    assert.equal(f.calls(), 0);
+    assert.equal(f.sync.item(source).status, "excluded");
+    let resolve!: (value: SourceAnalysis) => void;
+    f.classify(
+      async () =>
+        await new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    const pending = doc({ sender: "new@example.test" }),
+      pendingId = f.sync.ingest(f.account, pending);
+    const work = f.sync.analyzeOne();
+    while (!resolve) await new Promise((r) => setTimeout(r, 0));
+    const before = f.calls();
+    f.sync.workflow.addIgnore({
+      sender: pending.sender,
+      reason: "Automatisk avisering",
+    });
+    resolve(outcome());
+    await work;
+    assert.equal(f.calls(), before);
+    assert.equal(f.sync.item(pendingId).status, "excluded");
+    assert.equal(f.store.list().length, 0);
+    const rule = f.sync.workflow
+      .ignores()
+      .find((r) => r.sender === pending.sender)!;
+    assert.ok(
+      !String(
+        (
+          f.store.db
+            .prepare("SELECT payload FROM ignored_senders WHERE id=?")
+            .get(rule.id) as any
+        ).payload,
+      ).includes(pending.sender),
+    );
+    f.sync.workflow.removeIgnore(rule.id);
+    assert.equal(f.sync.workflow.isIgnored(pending), false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("calendar attendance, holidays and routine entries never create work; explicit preparation does", async () => {
+  const f = await fixture();
+  try {
+    await f.ready();
+    const calendar = doc({
+      kind: "calendar",
+      title: "Veckomöte",
+      body: "Agenda: status och nästa vecka.",
+      starts_at: "2026-11-14T09:00:00Z",
+      ends_at: "2026-11-14T10:00:00Z",
+      occurred_at: "2026-11-14T09:00:00Z",
+    });
+    for (const title of ["Veckomöte", "Juldagen", "Födelsedag", "Semester"]) {
+      f.sync.ingest(f.account, {
+        ...calendar,
+        identity: randomUUID(),
+        external_id: randomUUID(),
+        title,
+      });
+      await f.sync.analyzeOne();
+    }
+    assert.equal(f.calls(), 0);
+    assert.equal(f.store.list().length, 0);
+    f.classify(async () =>
+      outcome({
+        category: "meeting",
+        evidence: "Läs igenom underlaget och förbered budgeten.",
+        action_title: "Ta fram budgetunderlag",
+      }),
+    );
+    f.sync.ingest(f.account, {
+      ...calendar,
+      identity: randomUUID(),
+      external_id: randomUUID(),
+      body: "Läs igenom underlaget och förbered budgeten.",
+    });
+    await f.sync.analyzeOne();
+    assert.equal(f.calls(), 1);
+    assert.equal(f.store.list().length, 1);
+    // All events are still available as agenda entries, including routine entries.
+    assert.equal(f.sync.workflow.daily("2026-11-14").agenda.length, 5);
+  } finally {
+    await f.close();
+  }
+});
+
+test("overdue cards enter Backlog while waiting and completed cards retain their state; waiting has reason and follow-up", async () => {
+  const f = await fixture();
+  try {
+    const { backlog, waiting } = f.sync.workflow.columns(),
+      main = f.store.defaultBoardId(),
+      todo = f.store.columns(main).find((c) => c.key === "todo")!;
+    const late = f.store.create({
+      title: "Försenat",
+      column_id: todo.id,
+      due_date: "2026-11-12",
+    });
+    const wait = f.store.create({
+      title: "Leverans",
+      column_id: todo.id,
+      due_date: "2026-11-12",
+    });
+    f.sync.workflow.wait({
+      id: wait.id,
+      reason: "Väntar på leverantören",
+      until: "2026-11-16",
+    });
+    const done = f.store.create({
+      title: "Klart",
+      column_id: f.store.columns(main).find((c) => c.is_done)!.id,
+      due_date: "2026-11-12",
+    });
+    f.sync.workflow.tick(true);
+    assert.equal(f.store.get(late.id).column_id, backlog.id);
+    assert.equal(f.store.get(wait.id).column_id, waiting.id);
+    assert.equal(f.store.column(f.store.get(done.id).column_id).is_done, true);
+    const posts = f.store.detail(late.id).posts.length;
+    f.sync.workflow.tick(true);
+    assert.equal(f.store.detail(late.id).posts.length, posts);
+    assert.equal(
+      f.sync.workflow.daily().waiting[0].reason,
+      "Väntar på leverantören",
+    );
+    assert.equal(f.sync.workflow.daily().waiting[0].until_date, "2026-11-16");
+  } finally {
+    await f.close();
+  }
+});
+
+test("daily brief is once per Stockholm date at 06:00, survives restart, handles DST, and uses actual completions", async () => {
+  const f = await fixture();
+  try {
+    f.advance(Date.parse("2026-10-24T03:59:00Z") - now); // 05:59 CEST
+    f.sync.workflow.tick(true);
+    assert.equal(f.sync.workflow.daily().brief, null);
+    f.advance(60000);
+    f.sync.workflow.tick(true);
+    assert.ok(f.sync.workflow.daily().brief);
+    assert.equal(
+      f.sync.workflow.daily().next_at,
+      "2026-10-25T06:00:00.000+01:00",
+    );
+    const created = f.sync.workflow.daily().created_at;
+    f.sync.workflow.tick(true);
+    assert.equal(f.sync.workflow.daily().created_at, created);
+    f.advance(25 * 3600000); // 06:00 CET after fallback
+    f.sync.workflow.tick(true);
+    assert.equal(
+      (f.store.db.prepare("SELECT count(*) n FROM daily_briefs").get() as any)
+        .n,
+      2,
+    );
+    const restarted = new IntegrationSync(f.assistant, () =>
+      Date.parse("2026-10-25T07:00:00Z"),
+    );
+    restarted.workflow.tick(true);
+    await restarted.close();
+    assert.equal(
+      (f.store.db.prepare("SELECT count(*) n FROM daily_briefs").get() as any)
+        .n,
+      2,
+    );
+    f.advance(
+      Date.parse("2026-11-14T05:00:00Z") - Date.parse("2026-10-25T05:00:00Z"),
+    );
+    const t = f.store.create({ title: "Verkligt resultat" });
+    f.store.update(t.id, {
+      column_id: f.store
+        .columns(f.store.defaultBoardId())
+        .find((c) => c.is_done)!.id,
+    });
+    f.store.db
+      .prepare("UPDATE task_transitions SET created_at=? WHERE task_id=?")
+      .run("2026-11-13T15:00:00.000Z", t.id);
+    f.sync.workflow.tick(true);
+    assert.equal(
+      f.sync.workflow.daily("2026-11-14").brief?.yesterday.completed[0].title,
+      "Verkligt resultat",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("workflow write tools require an actual human instruction, count writes, and reject external-source authority", async () => {
+  const f = await fixture();
+  try {
+    const session = newSession();
+    await assert.rejects(
+      () =>
+        f.assistant.executeTool(
+          "add_ignored_sender",
+          { sender: "bad@example.test" },
+          session,
+        ),
+      /uttryckligen/,
+    );
+    session.userRequest = "Sammanfatta det här mejlet";
+    session.externalSelected = true;
+    await assert.rejects(
+      () =>
+        f.assistant.executeTool(
+          "add_ignored_sender",
+          { sender: "bad@example.test" },
+          session,
+        ),
+      /uttryckligen/,
+    );
+    session.externalSelected = false;
+    session.userRequest = "Ignorera bad@example.test";
+    const result = await f.assistant.executeTool(
+      "add_ignored_sender",
+      { sender: "bad@example.test" },
+      session,
+    );
+    assert.equal(result.writes, 1);
+    assert.equal(result.changed, true);
+    assert.ok(
+      f.sync.workflow.isIgnored({ kind: "mail", sender: "bad@example.test" }),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a master card enters Backlog when an active Scrum subtask is overdue, but not while the parent waits", async () => {
+  const f = await fixture();
+  try {
+    const parent = f.store.create({ title: "Masterkort" });
+    const child = f.store.createBoard({
+      name: "Underarbete",
+      kind: "scrum",
+      parent_task_id: parent.id,
+    });
+    f.store.create({
+      board_id: child.id,
+      title: "Försenat delarbete",
+      due_date: "2026-11-12",
+    });
+    f.sync.workflow.tick(true);
+    assert.equal(
+      f.store.column(f.store.get(parent.id).column_id).key,
+      "overdue",
+    );
+    assert.ok(
+      f.store
+        .detail(parent.id)
+        .posts.some((p) => p.content.includes("underuppgiften")),
+    );
+    f.sync.workflow.wait({
+      id: parent.id,
+      reason: "Inväntar beslut",
+      until: null,
+    });
+    f.sync.workflow.tick(true);
+    assert.equal(
+      f.store.column(f.store.get(parent.id).column_id).key,
+      "waiting",
+    );
+    assert.equal(
+      f.sync.workflow.taskInfo(parent.id).waiting?.reason,
+      "Inväntar beslut",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("ordinary analysis cannot remove an ignore rule and AI mail tools exclude ignored messages", async () => {
+  const f = await fixture();
+  try {
+    const rule = f.sync.workflow.ignores()[0],
+      session = newSession();
+    session.userRequest = "Analysera mina tio senaste mejl";
+    await assert.rejects(
+      () =>
+        f.assistant.executeTool(
+          "remove_ignored_sender",
+          { id: rule.id },
+          session,
+        ),
+      /uttryckligen/,
+    );
+    f.calendar.searchMail = async () => ({
+      messages: [
+        {
+          id: "blocked",
+          account_id: f.account,
+          subject: "Ignorerad",
+          from: { address: rule.sender, name: "Test" },
+          to: [],
+          cc: [],
+          received_at: new Date(now).toISOString(),
+          preview: "Ska inte lämnas till AI",
+          is_read: false,
+          has_attachments: false,
+          conversation_id: null,
+          url: null,
+        },
+      ],
+      next_offset: null,
+      fetched_at: new Date(now).toISOString(),
+    });
+    f.calendar.getMail = async () => ({
+      ...(await f.calendar.searchMail({})).messages[0],
+      body: "Hemlig testtext",
+      body_truncated: false,
+    });
+    const result = await f.assistant.executeTool(
+      "search_mail",
+      { account_id: f.account },
+      session,
+    );
+    assert.equal((result.result.messages as unknown[]).length, 0);
+    await assert.rejects(
+      () =>
+        f.assistant.executeTool(
+          "get_mail",
+          { account_id: f.account, message_id: "blocked" },
+          session,
+        ),
+      /ignore-listan/,
+    );
+    session.userRequest = `Ta bort ignore-regeln för ${rule.sender}`;
+    await f.assistant.executeTool(
+      "remove_ignored_sender",
+      { id: rule.id },
+      session,
+    );
+    assert.equal(f.sync.workflow.ignores().length, 0);
+  } finally {
+    await f.close();
+  }
+});
